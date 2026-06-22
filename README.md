@@ -1,6 +1,6 @@
 # Antigravity Remote Backend
 
-This is the backend server for the **Antigravity Remote** Android application. It acts as a bridge between your local Antigravity AI IDE and the remote mobile app. 
+This is the backend server for the **Antigravity Remote** Android application. It acts as a bridge between your local Antigravity AI and the remote mobile app. 
 
 It exposes a REST API and a WebSocket server, allowing the mobile app to:
 - Connect securely to your local machine
@@ -63,30 +63,27 @@ We recommend using **Tailscale** for a secure, zero-config VPN:
 2. Log in with the same account.
 3. Use your PC's Tailscale IP (e.g. `100.125.x.x`) in the Antigravity Remote Android App.
 
-## Setting up AI Auto-Wakeup (waitForMessage.js)
-Because the Antigravity IDE does not automatically wake up when the Node.js server receives a message from the mobile app, we rely on a background watcher script (`waitForMessage.js`).
+## How Message Delivery Works
 
-For this to work seamlessly, you must instruct your Antigravity agent to run this script whenever it expects a reply. 
-Add the following rule to your workspace's `AGENTS.md` file (or global config):
+The backend uses the native **AgentAPI** built into Antigravity to deliver messages directly to the AI agent:
 
-```markdown
-# CRITICAL: Always start the watcher script!
-Because the Antigravity IDE does not automatically wake up when the Node.js server receives a message from the mobile app, we rely on a background watcher script.
+1. On startup, the backend auto-discovers the running Antigravity Language Server (PID, CSRF token, HTTP port).
+2. When the mobile app sends a message, the backend calls `language_server.exe agentapi send-message` to deliver it.
+3. The Language Server **natively wakes up the agent** — no watcher scripts or polling required.
 
-At the very end of YOUR turn, **IF** you expect the user might reply from their phone, you **MUST** run the `waitForMessage.js` script in the background.
+If Antigravity is not running, messages fall back to file-based delivery and will be processed when the app is opened.
 
-\`\`\`bash
-# In the backend directory:
-node waitForMessage.js
-\`\`\`
-Use the `run_command` tool with `WaitMsBeforeAsync: 500`. 
-When the user sends a message from the phone, the script will exit and the completion of the background task will wake you up.
+You can check if the Language Server is available via the REST endpoint:
+```
+GET /api/ls-status
+→ {"available": true, "pid": 16808, "port": 52268, "method": "agentapi"}
 ```
 
 ## Features
 - **Real-time Sync**: Uses WebSockets to stream AI responses instantly to the phone.
 - **Image Uploads**: Supports uploading images from the phone's gallery directly into the Antigravity chat context.
-- **Direct Inbox Integration**: Uses a watcher script (`waitForMessage.js`) and a built-in Antigravity project rule (`.agents/AGENTS.md`) to automatically wake up the Antigravity IDE when a message is received from the mobile app.
+- **Native Agent Wakeup**: Uses AgentAPI to instantly wake up the Antigravity agent when a message arrives from the mobile app — no manual scripts needed.
+- **Auto-Discovery**: Automatically finds the running Language Server on startup, no configuration required.
 
 ## License
 MIT License

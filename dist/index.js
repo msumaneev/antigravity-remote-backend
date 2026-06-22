@@ -9,7 +9,9 @@ const ws_1 = require("ws");
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const handlers_1 = require("./api/handlers");
+const discovery_1 = require("./agentapi/discovery");
 dotenv_1.default.config();
+(0, discovery_1.initDiscovery)(); // Discover Language Server at startup (sync, one-time)
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 const wss = new ws_1.WebSocketServer({ server });

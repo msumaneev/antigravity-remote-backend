@@ -7,9 +7,10 @@ exports.setupRoutes = setupRoutes;
 const parser_1 = require("../history/parser");
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const manager_1 = require("../pty/manager");
+const sender_1 = require("../agentapi/sender");
+const discovery_1 = require("../agentapi/discovery");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const crypto_1 = __importDefault(require("crypto"));
 const os_1 = __importDefault(require("os"));
 const GEMINI_DIR = path_1.default.join(os_1.default.homedir(), '.gemini');
 const BRAIN_DIR = path_1.default.join(GEMINI_DIR, 'antigravity', 'brain');
@@ -243,6 +244,25 @@ const multer_1 = __importDefault(require("multer"));
 // We'll use memory storage and write it manually to the right place so we can use conversationId.
 const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
 function setupRoutes(app, wss) {
+    // REST: Check Language Server status (is Antigravity running?)
+    app.get('/api/ls-status', (req, res) => {
+        const discovery = (0, discovery_1.discoverLanguageServer)(true);
+        if (discovery) {
+            res.json({
+                available: true,
+                pid: discovery.pid,
+                port: discovery.httpPort,
+                method: 'agentapi',
+            });
+        }
+        else {
+            res.json({
+                available: false,
+                method: 'file-fallback',
+                warning: 'Language Server not found. Messages will be queued but agent won\'t wake automatically.',
+            });
+        }
+    });
     // REST: Upload image to a conversation
     app.post('/api/upload', upload.single('image'), (req, res) => {
         try {
@@ -367,21 +387,28 @@ function setupRoutes(app, wss) {
                     }
                     else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
-                        const id = crypto_1.default.randomUUID();
-                        const messageObj = {
-                            id: id,
-                            recipient: conversationId,
-                            sender: "USER_EXPLICIT",
-                            priority: "MESSAGE_PRIORITY_HIGH",
-                            timestamp: new Date().toISOString(),
-                            content: `<USER_REQUEST>\n[Отправлено с телефона]: ${msg.data.trim()}\n</USER_REQUEST>`
-                        };
-                        const msgPath = path_1.default.join(BRAIN_DIR, conversationId, '.system_generated', 'messages', `${id}.json`);
-                        const messagesDir = path_1.default.dirname(msgPath);
-                        if (!fs_1.default.existsSync(messagesDir)) {
-                            fs_1.default.mkdirSync(messagesDir, { recursive: true });
+                        try {
+                            const result = await (0, sender_1.sendMessage)(conversationId, msg.data);
+                            if (result.success) {
+                                ws.send(JSON.stringify({
+                                    type: 'EVENT',
+                                    data: `Message delivered via ${result.method}`
+                                }));
+                            }
+                            else {
+                                ws.send(JSON.stringify({
+                                    type: 'ERROR',
+                                    error: `Failed to send: ${result.error}`
+                                }));
+                            }
                         }
-                        fs_1.default.writeFileSync(msgPath, JSON.stringify(messageObj), 'utf8');
+                        catch (err) {
+                            console.error('[WebSocket] Error sending message:', err);
+                            ws.send(JSON.stringify({
+                                type: 'ERROR',
+                                error: `Send failed: ${err}`
+                            }));
+                        }
                     }
                 }
                 else if (msg.type === 'KILL') {

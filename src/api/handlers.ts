@@ -4,6 +4,8 @@ import { getProjects } from '../scanner/projects';
 import { readTranscript } from '../history/parser';
 import Database from 'better-sqlite3';
 import { spawnAntigravity, killAntigravity } from '../pty/manager';
+import { sendMessage } from '../agentapi/sender';
+import { discoverLanguageServer } from '../agentapi/discovery';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -252,6 +254,25 @@ import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage() });
 
 export function setupRoutes(app: Express, wss: WebSocketServer) {
+    // REST: Check Language Server status (is Antigravity running?)
+    app.get('/api/ls-status', (req: Request, res: Response) => {
+        const discovery = discoverLanguageServer(true);
+        if (discovery) {
+            res.json({
+                available: true,
+                pid: discovery.pid,
+                port: discovery.httpPort,
+                method: 'agentapi',
+            });
+        } else {
+            res.json({
+                available: false,
+                method: 'file-fallback',
+                warning: 'Language Server not found. Messages will be queued but agent won\'t wake automatically.',
+            });
+        }
+    });
+
     // REST: Upload image to a conversation
     app.post('/api/upload', upload.single('image'), (req: Request, res: Response) => {
         try {
@@ -385,21 +406,26 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         currentPtyProcess.write(msg.data + '\r');
                     } else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
-                        const id = crypto.randomUUID();
-                        const messageObj = {
-                            id: id,
-                            recipient: conversationId,
-                            sender: "USER_EXPLICIT",
-                            priority: "MESSAGE_PRIORITY_HIGH",
-                            timestamp: new Date().toISOString(),
-                            content: `<USER_REQUEST>\n[Отправлено с телефона]: ${msg.data.trim()}\n</USER_REQUEST>`
-                        };
-                        const msgPath = path.join(BRAIN_DIR, conversationId, '.system_generated', 'messages', `${id}.json`);
-                        const messagesDir = path.dirname(msgPath);
-                        if (!fs.existsSync(messagesDir)) {
-                            fs.mkdirSync(messagesDir, { recursive: true });
+                        try {
+                            const result = await sendMessage(conversationId, msg.data);
+                            if (result.success) {
+                                ws.send(JSON.stringify({
+                                    type: 'EVENT',
+                                    data: `Message delivered via ${result.method}`
+                                }));
+                            } else {
+                                ws.send(JSON.stringify({
+                                    type: 'ERROR',
+                                    error: `Failed to send: ${result.error}`
+                                }));
+                            }
+                        } catch (err) {
+                            console.error('[WebSocket] Error sending message:', err);
+                            ws.send(JSON.stringify({
+                                type: 'ERROR',
+                                error: `Send failed: ${err}`
+                            }));
                         }
-                        fs.writeFileSync(msgPath, JSON.stringify(messageObj), 'utf8');
                     }
                 } else if (msg.type === 'KILL') {
                     if (currentPtyProcess) {

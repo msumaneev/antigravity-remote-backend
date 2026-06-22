@@ -4,8 +4,10 @@ import { WebSocketServer } from 'ws';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { setupRoutes } from './api/handlers';
+import { initDiscovery } from './agentapi/discovery';
 
 dotenv.config();
+initDiscovery(); // Discover Language Server at startup (sync, one-time)
 
 const app = express();
 const server = http.createServer(app);
