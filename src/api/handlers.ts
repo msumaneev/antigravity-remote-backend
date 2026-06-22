@@ -381,22 +381,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         currentPtyProcess.write(msg.data + '\r');
                     } else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
-                        const id = crypto.randomUUID();
-                        const messageObj = {
-                            id: id,
-                            recipient: conversationId,
-                            sender: "USER_EXPLICIT",
-                            priority: "MESSAGE_PRIORITY_URGENT",
-                            timestamp: new Date().toISOString(),
-                            content: msg.data.trim()
-                        };
-                        const msgPath = path.join(BRAIN_DIR, conversationId, '.system_generated', 'messages', `${id}.json`);
-                        const messagesDir = path.dirname(msgPath);
-                        if (!fs.existsSync(messagesDir)) {
-                            fs.mkdirSync(messagesDir, { recursive: true });
+                        const inboxDir = path.join(BRAIN_DIR, conversationId, 'inbox');
+                        if (!fs.existsSync(inboxDir)) {
+                            fs.mkdirSync(inboxDir, { recursive: true });
                         }
-                        fs.writeFileSync(msgPath, JSON.stringify(messageObj));
-                        // Only write to messages folder, the daemon will update transcript.jsonl
+                        const timestamp = Date.now();
+                        const msgPath = path.join(inboxDir, `msg_phone_${timestamp}.txt`);
+                        const content = `[Сообщение с телефона]: ${msg.data.trim()}`;
+                        fs.writeFileSync(msgPath, content, 'utf8');
                     }
                 } else if (msg.type === 'KILL') {
                     if (currentPtyProcess) {

@@ -24,11 +24,30 @@ It exposes a REST API and a WebSocket server, allowing the mobile app to:
 
 ## Running the Server
 
+### Option 1: Manual Run
 Start the server using:
 ```bash
 npm start
 ```
 The server will start on port `8080` by default.
+
+### Option 2: Autostart (Recommended)
+To keep the server running in the background and start automatically when your PC turns on, we recommend using PM2:
+
+1. Install PM2 globally:
+   ```bash
+   npm install -g pm2
+   ```
+2. Start the backend:
+   ```bash
+   pm2 start npm --name "antigravity-remote" -- start
+   ```
+3. Save the process list so it respawns on boot:
+   ```bash
+   pm2 save
+   pm2 startup
+   ```
+*(Follow the instructions PM2 prints in the terminal after running `pm2 startup` to complete the setup).*
 
 ### Exposing the server to the internet
 Since this server runs locally on your PC, your phone needs a way to reach it.
@@ -40,7 +59,7 @@ We recommend using **Tailscale** for a secure, zero-config VPN:
 ## Features
 - **Real-time Sync**: Uses WebSockets to stream AI responses instantly to the phone.
 - **Image Uploads**: Supports uploading images from the phone's gallery directly into the Antigravity chat context.
-- **Background Watcher**: Includes `waitForMessage.js` to ensure the Antigravity IDE wakes up instantly upon receiving a message from the mobile app.
+- **Direct Inbox Integration**: Seamlessly wakes up the Antigravity IDE when a message is received from the mobile app (no background watcher script needed!).
 
 ## License
 MIT License

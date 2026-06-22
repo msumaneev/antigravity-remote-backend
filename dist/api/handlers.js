@@ -9,7 +9,6 @@ const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const manager_1 = require("../pty/manager");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const crypto_1 = __importDefault(require("crypto"));
 const BRAIN_DIR = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\brain';
 function extractTitle(dir, id) {
     const filesToTry = ['task.md', 'walkthrough.md', 'implementation_plan.md'];
@@ -363,22 +362,14 @@ function setupRoutes(app, wss) {
                     }
                     else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
-                        const id = crypto_1.default.randomUUID();
-                        const messageObj = {
-                            id: id,
-                            recipient: conversationId,
-                            sender: "USER_EXPLICIT",
-                            priority: "MESSAGE_PRIORITY_URGENT",
-                            timestamp: new Date().toISOString(),
-                            content: msg.data.trim()
-                        };
-                        const msgPath = path_1.default.join(BRAIN_DIR, conversationId, '.system_generated', 'messages', `${id}.json`);
-                        const messagesDir = path_1.default.dirname(msgPath);
-                        if (!fs_1.default.existsSync(messagesDir)) {
-                            fs_1.default.mkdirSync(messagesDir, { recursive: true });
+                        const inboxDir = path_1.default.join(BRAIN_DIR, conversationId, 'inbox');
+                        if (!fs_1.default.existsSync(inboxDir)) {
+                            fs_1.default.mkdirSync(inboxDir, { recursive: true });
                         }
-                        fs_1.default.writeFileSync(msgPath, JSON.stringify(messageObj));
-                        // Only write to messages folder, the daemon will update transcript.jsonl
+                        const timestamp = Date.now();
+                        const msgPath = path_1.default.join(inboxDir, `msg_phone_${timestamp}.txt`);
+                        const content = `[Сообщение с телефона]: ${msg.data.trim()}`;
+                        fs_1.default.writeFileSync(msgPath, content, 'utf8');
                     }
                 }
                 else if (msg.type === 'KILL') {
