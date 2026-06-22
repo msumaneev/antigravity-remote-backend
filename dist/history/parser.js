@@ -37,8 +37,9 @@ exports.readTranscript = readTranscript;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const readline = __importStar(require("readline"));
+const os = __importStar(require("os"));
 // Base directory for Antigravity Brain
-const BRAIN_DIR = path.join(process.env.APPDATA || process.env.USERPROFILE || '', '.gemini', 'antigravity', 'brain');
+const BRAIN_DIR = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
 async function readTranscript(conversationId) {
     const transcriptPath = path.join(BRAIN_DIR, conversationId, '.system_generated', 'logs', 'transcript.jsonl');
     if (!fs.existsSync(transcriptPath)) {

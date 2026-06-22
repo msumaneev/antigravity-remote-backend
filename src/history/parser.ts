@@ -2,9 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 
+import * as os from 'os';
+
 // Base directory for Antigravity Brain
 const BRAIN_DIR = path.join(
-    process.env.APPDATA || process.env.USERPROFILE || '',
+    os.homedir(),
     '.gemini', 'antigravity', 'brain'
 );
 

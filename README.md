@@ -22,6 +22,13 @@ It exposes a REST API and a WebSocket server, allowing the mobile app to:
    npm install
    ```
 
+3. **Build the project:**
+   The server is written in TypeScript. After downloading or making changes to the source code, you must build it:
+   ```bash
+   npm run build
+   ```
+   *Note: The backend automatically determines your Antigravity workspaces path (`.gemini/antigravity`) across Windows, macOS, or Linux, so no manual path configuration is required!*
+
 ## Running the Server
 
 ### Option 1: Manual Run
@@ -56,10 +63,30 @@ We recommend using **Tailscale** for a secure, zero-config VPN:
 2. Log in with the same account.
 3. Use your PC's Tailscale IP (e.g. `100.125.x.x`) in the Antigravity Remote Android App.
 
+## Setting up AI Auto-Wakeup (waitForMessage.js)
+Because the Antigravity IDE does not automatically wake up when the Node.js server receives a message from the mobile app, we rely on a background watcher script (`waitForMessage.js`).
+
+For this to work seamlessly, you must instruct your Antigravity agent to run this script whenever it expects a reply. 
+Add the following rule to your workspace's `AGENTS.md` file (or global config):
+
+```markdown
+# CRITICAL: Always start the watcher script!
+Because the Antigravity IDE does not automatically wake up when the Node.js server receives a message from the mobile app, we rely on a background watcher script.
+
+At the very end of YOUR turn, **IF** you expect the user might reply from their phone, you **MUST** run the `waitForMessage.js` script in the background.
+
+\`\`\`bash
+# In the backend directory:
+node waitForMessage.js
+\`\`\`
+Use the `run_command` tool with `WaitMsBeforeAsync: 500`. 
+When the user sends a message from the phone, the script will exit and the completion of the background task will wake you up.
+```
+
 ## Features
 - **Real-time Sync**: Uses WebSockets to stream AI responses instantly to the phone.
 - **Image Uploads**: Supports uploading images from the phone's gallery directly into the Antigravity chat context.
-- **Direct Inbox Integration**: Seamlessly wakes up the Antigravity IDE when a message is received from the mobile app (no background watcher script needed!).
+- **Direct Inbox Integration**: Uses a watcher script (`waitForMessage.js`) and a built-in Antigravity project rule (`.agents/AGENTS.md`) to automatically wake up the Antigravity IDE when a message is received from the mobile app.
 
 ## License
 MIT License

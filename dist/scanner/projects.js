@@ -36,7 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getProjects = getProjects;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const BRAIN_DIR = path.join(process.env.APPDATA || process.env.USERPROFILE || '', '.gemini', 'antigravity', 'brain');
+const os = __importStar(require("os"));
+const BRAIN_DIR = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
 async function getProjects() {
     // For now, we will just scan the brain directory for conversation IDs
     // since every active chat/project has a conversation ID folder there.

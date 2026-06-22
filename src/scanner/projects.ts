@@ -1,8 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import * as os from 'os';
+
 const BRAIN_DIR = path.join(
-    process.env.APPDATA || process.env.USERPROFILE || '',
+    os.homedir(),
     '.gemini', 'antigravity', 'brain'
 );
 

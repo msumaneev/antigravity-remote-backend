@@ -9,7 +9,10 @@ const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const manager_1 = require("../pty/manager");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const BRAIN_DIR = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\brain';
+const crypto_1 = __importDefault(require("crypto"));
+const os_1 = __importDefault(require("os"));
+const GEMINI_DIR = path_1.default.join(os_1.default.homedir(), '.gemini');
+const BRAIN_DIR = path_1.default.join(GEMINI_DIR, 'antigravity', 'brain');
 function extractTitle(dir, id) {
     const filesToTry = ['task.md', 'walkthrough.md', 'implementation_plan.md'];
     for (const file of filesToTry) {
@@ -88,8 +91,8 @@ function extractSubtitle(dir) {
     return '';
 }
 async function getProjectsTree() {
-    const projectsConfigDir = 'C:\\Users\\Michael Sumaneev\\.gemini\\config\\projects';
-    const conversationsDbDir = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\conversations';
+    const projectsConfigDir = path_1.default.join(GEMINI_DIR, 'config', 'projects');
+    const conversationsDbDir = path_1.default.join(GEMINI_DIR, 'antigravity', 'conversations');
     const projectMap = {};
     if (fs_1.default.existsSync(projectsConfigDir)) {
         const files = fs_1.default.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
@@ -117,7 +120,7 @@ async function getProjectsTree() {
     }
     // Read real titles from Desktop IDE's protobuf summaries
     const summariesMap = {};
-    const summariesPbPath = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\agyhub_summaries_proto.pb';
+    const summariesPbPath = path_1.default.join(GEMINI_DIR, 'antigravity', 'agyhub_summaries_proto.pb');
     if (fs_1.default.existsSync(summariesPbPath)) {
         try {
             const buf = fs_1.default.readFileSync(summariesPbPath);
@@ -197,6 +200,8 @@ async function getProjectsTree() {
     // Initialize with all active projects
     for (const pId in projectMap) {
         projectsDict[pId] = {
+            id: pId,
+            name: projectMap[pId].name,
             projectName: projectMap[pId].name,
             projectPath: projectMap[pId].path,
             conversations: []
@@ -285,7 +290,7 @@ function setupRoutes(app, wss) {
             const { conversationId } = req.body;
             if (!conversationId)
                 return res.status(400).json({ error: 'conversationId is required' });
-            const conversationsDbDir = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\conversations';
+            const conversationsDbDir = path_1.default.join(GEMINI_DIR, 'antigravity', 'conversations');
             const archivedChatsPath = path_1.default.join(conversationsDbDir, 'archived_chats.json');
             let archivedChats = [];
             if (fs_1.default.existsSync(archivedChatsPath)) {
@@ -362,14 +367,21 @@ function setupRoutes(app, wss) {
                     }
                     else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
-                        const inboxDir = path_1.default.join(BRAIN_DIR, conversationId, 'inbox');
-                        if (!fs_1.default.existsSync(inboxDir)) {
-                            fs_1.default.mkdirSync(inboxDir, { recursive: true });
+                        const id = crypto_1.default.randomUUID();
+                        const messageObj = {
+                            id: id,
+                            recipient: conversationId,
+                            sender: "USER_EXPLICIT",
+                            priority: "MESSAGE_PRIORITY_HIGH",
+                            timestamp: new Date().toISOString(),
+                            content: `<USER_REQUEST>\n[Отправлено с телефона]: ${msg.data.trim()}\n</USER_REQUEST>`
+                        };
+                        const msgPath = path_1.default.join(BRAIN_DIR, conversationId, '.system_generated', 'messages', `${id}.json`);
+                        const messagesDir = path_1.default.dirname(msgPath);
+                        if (!fs_1.default.existsSync(messagesDir)) {
+                            fs_1.default.mkdirSync(messagesDir, { recursive: true });
                         }
-                        const timestamp = Date.now();
-                        const msgPath = path_1.default.join(inboxDir, `msg_phone_${timestamp}.txt`);
-                        const content = `[Сообщение с телефона]: ${msg.data.trim()}`;
-                        fs_1.default.writeFileSync(msgPath, content, 'utf8');
+                        fs_1.default.writeFileSync(msgPath, JSON.stringify(messageObj), 'utf8');
                     }
                 }
                 else if (msg.type === 'KILL') {
@@ -396,21 +408,25 @@ function setupRoutes(app, wss) {
                         if (fs_1.default.existsSync(logFile)) {
                             const content = fs_1.default.readFileSync(logFile, 'utf-8');
                             const lines = content.split('\n');
-                            let currentChunk = [];
+                            const allMsgs = [];
                             for (const line of lines) {
                                 if (line.trim()) {
                                     try {
-                                        currentChunk.push(JSON.parse(line));
-                                        if (currentChunk.length >= 50) {
-                                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: currentChunk }));
-                                            currentChunk = [];
-                                        }
+                                        allMsgs.push(JSON.parse(line));
                                     }
                                     catch (e) { }
                                 }
                             }
-                            if (currentChunk.length > 0) {
-                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: currentChunk }));
+                            const limit = msg.limit || 50;
+                            const offset = msg.offset || 0;
+                            const endIdx = allMsgs.length - offset;
+                            const startIdx = Math.max(0, endIdx - limit);
+                            if (startIdx < endIdx) {
+                                const chunk = allMsgs.slice(startIdx, endIdx);
+                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: chunk, offset: offset + chunk.length, hasMore: startIdx > 0, isPagination: offset > 0 }));
+                            }
+                            else {
+                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset, hasMore: false, isPagination: offset > 0 }));
                             }
                         }
                         else {
@@ -422,47 +438,49 @@ function setupRoutes(app, wss) {
                         ws.send(JSON.stringify({ type: 'ERROR', error: String(err) }));
                     }
                     // Setup real-time watching
-                    try {
-                        const id = msg.id;
-                        const logFile = path_1.default.join(BRAIN_DIR, id, '.system_generated', 'logs', 'transcript.jsonl');
-                        if (fs_1.default.existsSync(logFile)) {
-                            if (ws.transcriptWatcher) {
-                                ws.transcriptWatcher.close();
-                            }
-                            let currentSize = fs_1.default.statSync(logFile).size;
-                            ws.transcriptWatcher = fs_1.default.watch(logFile, (eventType, filename) => {
-                                try {
-                                    const newSize = fs_1.default.statSync(logFile).size;
-                                    if (newSize > currentSize) {
-                                        const fd = fs_1.default.openSync(logFile, 'r');
-                                        const buffer = Buffer.alloc(newSize - currentSize);
-                                        fs_1.default.readSync(fd, buffer, 0, newSize - currentSize, currentSize);
-                                        fs_1.default.closeSync(fd);
-                                        currentSize = newSize;
-                                        const newContent = buffer.toString('utf-8');
-                                        const lines = newContent.split('\n');
-                                        const newMessages = [];
-                                        for (const line of lines) {
-                                            if (line.trim()) {
-                                                try {
-                                                    const parsed = JSON.parse(line);
-                                                    newMessages.push(parsed);
+                    if (!msg.offset) {
+                        try {
+                            const id = msg.id;
+                            const logFile = path_1.default.join(BRAIN_DIR, id, '.system_generated', 'logs', 'transcript.jsonl');
+                            if (fs_1.default.existsSync(logFile)) {
+                                if (ws.transcriptWatcher) {
+                                    ws.transcriptWatcher.close();
+                                }
+                                let currentSize = fs_1.default.statSync(logFile).size;
+                                ws.transcriptWatcher = fs_1.default.watch(logFile, (eventType, filename) => {
+                                    try {
+                                        const newSize = fs_1.default.statSync(logFile).size;
+                                        if (newSize > currentSize) {
+                                            const fd = fs_1.default.openSync(logFile, 'r');
+                                            const buffer = Buffer.alloc(newSize - currentSize);
+                                            fs_1.default.readSync(fd, buffer, 0, newSize - currentSize, currentSize);
+                                            fs_1.default.closeSync(fd);
+                                            currentSize = newSize;
+                                            const newContent = buffer.toString('utf-8');
+                                            const lines = newContent.split('\n');
+                                            const newMessages = [];
+                                            for (const line of lines) {
+                                                if (line.trim()) {
+                                                    try {
+                                                        const parsed = JSON.parse(line);
+                                                        newMessages.push(parsed);
+                                                    }
+                                                    catch (e) { }
                                                 }
-                                                catch (e) { }
+                                            }
+                                            if (newMessages.length > 0) {
+                                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: newMessages }));
                                             }
                                         }
-                                        if (newMessages.length > 0) {
-                                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: newMessages }));
-                                        }
                                     }
-                                }
-                                catch (e) {
-                                    // ignore read errors
-                                }
-                            });
+                                    catch (e) {
+                                        // ignore read errors
+                                    }
+                                });
+                            }
                         }
+                        catch (err) { }
                     }
-                    catch (err) { }
                 }
             }
             catch (err) {

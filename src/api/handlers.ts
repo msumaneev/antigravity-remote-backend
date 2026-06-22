@@ -7,8 +7,10 @@ import { spawnAntigravity, killAntigravity } from '../pty/manager';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 
-const BRAIN_DIR = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\brain';
+const GEMINI_DIR = path.join(os.homedir(), '.gemini');
+const BRAIN_DIR = path.join(GEMINI_DIR, 'antigravity', 'brain');
 
 function extractTitle(dir: string, id: string): string {
     const filesToTry = ['task.md', 'walkthrough.md', 'implementation_plan.md'];
@@ -86,8 +88,8 @@ function extractSubtitle(dir: string): string {
 }
 
 async function getProjectsTree() {
-    const projectsConfigDir = 'C:\\Users\\Michael Sumaneev\\.gemini\\config\\projects';
-    const conversationsDbDir = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\conversations';
+    const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
+    const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
     
     const projectMap: Record<string, { name: string, path: string }> = {};
     if (fs.existsSync(projectsConfigDir)) {
@@ -116,7 +118,7 @@ async function getProjectsTree() {
     
     // Read real titles from Desktop IDE's protobuf summaries
     const summariesMap: Record<string, string> = {};
-    const summariesPbPath = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\agyhub_summaries_proto.pb';
+    const summariesPbPath = path.join(GEMINI_DIR, 'antigravity', 'agyhub_summaries_proto.pb');
     if (fs.existsSync(summariesPbPath)) {
         try {
             const buf = fs.readFileSync(summariesPbPath);
@@ -199,6 +201,8 @@ async function getProjectsTree() {
     // Initialize with all active projects
     for (const pId in projectMap) {
         projectsDict[pId] = {
+            id: pId,
+            name: projectMap[pId].name,
             projectName: projectMap[pId].name,
             projectPath: projectMap[pId].path,
             conversations: []
@@ -300,7 +304,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             const { conversationId } = req.body;
             if (!conversationId) return res.status(400).json({ error: 'conversationId is required' });
             
-            const conversationsDbDir = 'C:\\Users\\Michael Sumaneev\\.gemini\\antigravity\\conversations';
+            const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
             const archivedChatsPath = path.join(conversationsDbDir, 'archived_chats.json');
             let archivedChats: string[] = [];
             if (fs.existsSync(archivedChatsPath)) {
@@ -381,14 +385,21 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         currentPtyProcess.write(msg.data + '\r');
                     } else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
-                        const inboxDir = path.join(BRAIN_DIR, conversationId, 'inbox');
-                        if (!fs.existsSync(inboxDir)) {
-                            fs.mkdirSync(inboxDir, { recursive: true });
+                        const id = crypto.randomUUID();
+                        const messageObj = {
+                            id: id,
+                            recipient: conversationId,
+                            sender: "USER_EXPLICIT",
+                            priority: "MESSAGE_PRIORITY_HIGH",
+                            timestamp: new Date().toISOString(),
+                            content: `<USER_REQUEST>\n[Отправлено с телефона]: ${msg.data.trim()}\n</USER_REQUEST>`
+                        };
+                        const msgPath = path.join(BRAIN_DIR, conversationId, '.system_generated', 'messages', `${id}.json`);
+                        const messagesDir = path.dirname(msgPath);
+                        if (!fs.existsSync(messagesDir)) {
+                            fs.mkdirSync(messagesDir, { recursive: true });
                         }
-                        const timestamp = Date.now();
-                        const msgPath = path.join(inboxDir, `msg_phone_${timestamp}.txt`);
-                        const content = `[Сообщение с телефона]: ${msg.data.trim()}`;
-                        fs.writeFileSync(msgPath, content, 'utf8');
+                        fs.writeFileSync(msgPath, JSON.stringify(messageObj), 'utf8');
                     }
                 } else if (msg.type === 'KILL') {
                     if (currentPtyProcess) {
@@ -411,20 +422,26 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         if (fs.existsSync(logFile)) {
                             const content = fs.readFileSync(logFile, 'utf-8');
                             const lines = content.split('\n');
-                            let currentChunk = [];
+                            const allMsgs: any[] = [];
                             for (const line of lines) {
                                 if (line.trim()) {
                                     try {
-                                        currentChunk.push(JSON.parse(line));
-                                        if (currentChunk.length >= 50) {
-                                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: currentChunk }));
-                                            currentChunk = [];
-                                        }
+                                        allMsgs.push(JSON.parse(line));
                                     } catch(e) {}
                                 }
                             }
-                            if (currentChunk.length > 0) {
-                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: currentChunk }));
+                            
+                            const limit = msg.limit || 50;
+                            const offset = msg.offset || 0;
+                            
+                            const endIdx = allMsgs.length - offset;
+                            const startIdx = Math.max(0, endIdx - limit);
+                            
+                            if (startIdx < endIdx) {
+                                const chunk = allMsgs.slice(startIdx, endIdx);
+                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: chunk, offset: offset + chunk.length, hasMore: startIdx > 0, isPagination: offset > 0 }));
+                            } else {
+                                ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset, hasMore: false, isPagination: offset > 0 }));
                             }
                         } else {
                             ws.send(JSON.stringify({ type: 'ERROR', error: 'Transcript not found' }));
@@ -435,8 +452,9 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     }
 
                     // Setup real-time watching
-                    try {
-                        const id = msg.id;
+                    if (!msg.offset) {
+                        try {
+                            const id = msg.id;
                         const logFile = path.join(BRAIN_DIR, id, '.system_generated', 'logs', 'transcript.jsonl');
                         if (fs.existsSync(logFile)) {
                             if ((ws as any).transcriptWatcher) {
@@ -474,6 +492,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             });
                         }
                     } catch (err) {}
+                    }
                 }
             } catch (err) {
                 console.error('[WebSocket] Error processing message', err);
