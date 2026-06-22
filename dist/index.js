@@ -20,9 +20,9 @@ app.use(express_1.default.json());
 const os_1 = __importDefault(require("os"));
 const initialPort = parseInt(process.env.PORT || '8080', 10);
 const HOST = process.env.HOST || '0.0.0.0';
+const readline_1 = __importDefault(require("readline"));
 function getTailscaleIp() {
     const interfaces = os_1.default.networkInterfaces();
-    // First try to find a Tailscale IP (100.x.x.x)
     for (const name of Object.keys(interfaces)) {
         const ifaces = interfaces[name];
         if (!ifaces)
@@ -35,14 +35,19 @@ function getTailscaleIp() {
             }
         }
     }
-    // Fallback to any non-internal IPv4
+    return null;
+}
+function getLocalIp() {
+    const interfaces = os_1.default.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
         const ifaces = interfaces[name];
         if (!ifaces)
             continue;
         for (const iface of ifaces) {
             if (iface.family === 'IPv4' && !iface.internal) {
-                return iface.address;
+                if (!iface.address.startsWith('100.')) {
+                    return iface.address;
+                }
             }
         }
     }
@@ -51,12 +56,12 @@ function getTailscaleIp() {
 function startServer(port) {
     server.listen(port, HOST)
         .on('listening', () => {
-        const tailscaleIp = getTailscaleIp();
+        const ipToShow = getTailscaleIp() || getLocalIp();
         console.log(`\n=================================================`);
         console.log(`🚀 Antigravity Remote Backend is RUNNING`);
         console.log(`=================================================`);
         console.log(`\n📱 Enter these settings in your Android App:\n`);
-        console.log(`   IP Address : ${tailscaleIp}`);
+        console.log(`   IP Address : ${ipToShow}`);
         console.log(`   Port       : ${port}`);
         console.log(`\n=================================================\n`);
     })
@@ -70,4 +75,29 @@ function startServer(port) {
         }
     });
 }
-startServer(initialPort);
+function checkTailscaleAndStart() {
+    const tsIp = getTailscaleIp();
+    if (!tsIp) {
+        const rl = readline_1.default.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+        console.log('\n⚠️  Tailscale is NOT detected on your system.');
+        console.log('To connect to Antigravity Remote securely from anywhere, we highly recommend installing Tailscale.');
+        console.log('Download it from: https://tailscale.com/download');
+        rl.question('\nWould you like to continue using your local network IP anyway? (y/n): ', (answer) => {
+            rl.close();
+            if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
+                startServer(initialPort);
+            }
+            else {
+                console.log('Exiting...');
+                process.exit(0);
+            }
+        });
+    }
+    else {
+        startServer(initialPort);
+    }
+}
+checkTailscaleAndStart();
