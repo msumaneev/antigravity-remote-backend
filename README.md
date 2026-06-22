@@ -12,7 +12,7 @@ It exposes a REST API and a WebSocket server, allowing the mobile app to:
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/MikeSumaneev/antigravity-remote-backend.git
+   git clone https://github.com/msumaneev/antigravity-remote-backend.git
    cd antigravity-remote-backend
    ```
 
