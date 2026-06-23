@@ -20,6 +20,51 @@ app.use(express_1.default.json());
 // Set up REST API routes
 (0, handlers_1.setupRoutes)(app, wss);
 const os_1 = __importDefault(require("os"));
+let prevCpus = os_1.default.cpus();
+function getSystemCpuUsagePercent() {
+    const cpus = os_1.default.cpus();
+    let idleDiff = 0;
+    let totalDiff = 0;
+    for (let i = 0; i < cpus.length; i++) {
+        const cpu = cpus[i];
+        const prevCpu = prevCpus[i];
+        let idle = cpu.times.idle;
+        let prevIdle = prevCpu.times.idle;
+        let total = 0;
+        let prevTotal = 0;
+        for (const type in cpu.times) {
+            total += cpu.times[type];
+            prevTotal += prevCpu.times[type];
+        }
+        idleDiff += (idle - prevIdle);
+        totalDiff += (total - prevTotal);
+    }
+    prevCpus = cpus;
+    if (totalDiff === 0)
+        return 0;
+    return 100 - Math.floor((idleDiff / totalDiff) * 100);
+}
+setInterval(() => {
+    if (wss.clients.size === 0)
+        return;
+    const totalMem = os_1.default.totalmem();
+    const freeMem = os_1.default.freemem();
+    const usedMem = totalMem - freeMem;
+    const ramPercent = Math.floor((usedMem / totalMem) * 100);
+    const cpuPercent = getSystemCpuUsagePercent();
+    const payload = JSON.stringify({
+        type: 'SERVER_STATS',
+        data: {
+            cpu: cpuPercent,
+            ram: ramPercent
+        }
+    });
+    wss.clients.forEach(client => {
+        if (client.readyState === 1) { // 1 = OPEN
+            client.send(payload);
+        }
+    });
+}, 3000);
 const initialPort = parseInt(process.env.PORT || '8080', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const readline_1 = __importDefault(require("readline"));
