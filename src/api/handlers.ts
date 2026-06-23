@@ -384,6 +384,13 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         ]);
     });
 
+    // Read server version for health endpoint
+    let serverVersion = '2.0.0';
+    try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8'));
+        if (pkg.version) serverVersion = pkg.version;
+    } catch {}
+
     app.get('/api/health', async (req: Request, res: Response) => {
         try {
             const heartbeat = await callRPC('Heartbeat', {}, { timeoutMs: 2000 });
@@ -393,9 +400,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 lsRunning: !!ls,
                 lastHeartbeat: heartbeat.lastExtensionHeartbeat,
                 pid: ls?.pid,
+                version: serverVersion,
             });
         } catch {
-            res.json({ ok: true, lsRunning: false });
+            res.json({ ok: true, lsRunning: false, version: serverVersion });
         }
     });
 

@@ -365,6 +365,14 @@ function setupRoutes(app, wss) {
             { model: "Claude 3.5 Sonnet", calls: 120 }
         ]);
     });
+    // Read server version for health endpoint
+    let serverVersion = '2.0.0';
+    try {
+        const pkg = JSON.parse(fs_1.default.readFileSync(path_1.default.join(__dirname, '../../package.json'), 'utf-8'));
+        if (pkg.version)
+            serverVersion = pkg.version;
+    }
+    catch { }
     app.get('/api/health', async (req, res) => {
         try {
             const heartbeat = await (0, rpc_1.callRPC)('Heartbeat', {}, { timeoutMs: 2000 });
@@ -374,10 +382,11 @@ function setupRoutes(app, wss) {
                 lsRunning: !!ls,
                 lastHeartbeat: heartbeat.lastExtensionHeartbeat,
                 pid: ls?.pid,
+                version: serverVersion,
             });
         }
         catch {
-            res.json({ ok: true, lsRunning: false });
+            res.json({ ok: true, lsRunning: false, version: serverVersion });
         }
     });
     app.get('/api/account', async (req, res) => {
