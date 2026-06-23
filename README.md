@@ -59,7 +59,7 @@ We recommend using **Tailscale** for a secure, zero-config VPN:
 
 ## New RPC Interaction System
 
-Our backend no longer relies on slow file-system watchers or CLI commands (`agentapi send-message`). Instead, it connects directly to the Antigravity Language Server (LS) the exact same way the official IDE extension does!
+The backend connects directly to the Antigravity Language Server (LS) exactly like the official IDE extension does:
 
 1. **Auto-Discovery**: On startup, the backend automatically locates the running Language Server by inspecting local processes.
 2. **Direct WebSocket RPC**: It establishes a direct, authenticated WebSocket connection to `ws://127.0.0.1:<port>/rpc`.
