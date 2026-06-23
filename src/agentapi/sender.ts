@@ -21,10 +21,16 @@ interface SendResult {
  */
 export async function sendMessage(
     conversationId: string,
-    rawContent: string
+    rawContent: string,
+    model?: string
 ): Promise<SendResult> {
+    let settingsInjection = '';
+    if (model) {
+        settingsInjection = `<USER_SETTINGS_CHANGE>\nThe user changed setting \`Model Selection\` to ${model}.\n</USER_SETTINGS_CHANGE>\n`;
+    }
+
     // Wrap in USER_REQUEST tags so the agent sees it as a user message
-    const content = `<USER_REQUEST>\n[Отправлено с телефона]: ${rawContent.trim()}\n</USER_REQUEST>`;
+    const content = `${settingsInjection}<USER_REQUEST>\n[Отправлено с телефона]: ${rawContent.trim()}\n</USER_REQUEST>`;
 
     // Try AgentAPI first
     const result = await sendViaAgentAPI(conversationId, content);

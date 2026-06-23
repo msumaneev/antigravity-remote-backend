@@ -1,12 +1,8 @@
 # Antigravity Remote Backend
 
-This is the backend server for the **Antigravity Remote** Android application. It acts as a bridge between your local Antigravity AI and the remote mobile app. 
+This is the backend server for the **Antigravity Remote** Android application. It acts as a seamless bridge between your local Antigravity AI and the remote mobile app.
 
-It exposes a REST API and a WebSocket server, allowing the mobile app to:
-- Connect securely to your local machine
-- Retrieve the active workspace and conversation transcripts
-- Send user inputs (text and images) directly to the Antigravity AI
-- Receive real-time push notifications and responses from the AI
+With our latest update, the backend has been completely rewritten to interface directly with the Antigravity Language Server via its internal **RPC Protocol** over WebSockets, bringing a true native IDE experience to your mobile device.
 
 ## Installation
 
@@ -27,7 +23,6 @@ It exposes a REST API and a WebSocket server, allowing the mobile app to:
    ```bash
    npm run build
    ```
-   *Note: The backend automatically determines your Antigravity workspaces path (`.gemini/antigravity`) across Windows, macOS, or Linux, so no manual path configuration is required!*
 
 ## Running the Server
 
@@ -54,7 +49,6 @@ To keep the server running in the background and start automatically when your P
    pm2 save
    pm2 startup
    ```
-*(Follow the instructions PM2 prints in the terminal after running `pm2 startup` to complete the setup).*
 
 ### Exposing the server to the internet
 Since this server runs locally on your PC, your phone needs a way to reach it.
@@ -63,27 +57,24 @@ We recommend using **Tailscale** for a secure, zero-config VPN:
 2. Log in with the same account.
 3. Use your PC's Tailscale IP (e.g. `100.125.x.x`) in the Antigravity Remote Android App.
 
-## How Message Delivery Works
+## New RPC Interaction System
 
-The backend uses the native **AgentAPI** built into Antigravity to deliver messages directly to the AI agent:
+Our backend no longer relies on slow file-system watchers or CLI commands (`agentapi send-message`). Instead, it connects directly to the Antigravity Language Server (LS) the exact same way the official IDE extension does!
 
-1. On startup, the backend auto-discovers the running Antigravity Language Server (PID, CSRF token, HTTP port).
-2. When the mobile app sends a message, the backend calls `language_server.exe agentapi send-message` to deliver it.
-3. The Language Server **natively wakes up the agent** — no watcher scripts or polling required.
+1. **Auto-Discovery**: On startup, the backend automatically locates the running Language Server by inspecting local processes.
+2. **Direct WebSocket RPC**: It establishes a direct, authenticated WebSocket connection to `ws://127.0.0.1:<port>/rpc`.
+3. **Native Message Sending**: User messages from the mobile app are sent natively using the LS command `workspace.executeCommand("agent.userInput")`.
+4. **Real-Time Streaming**: 
+   - We subscribe to `agent.stateStream` to instantly push the agent's current status (Thinking, Executing, Error) to the mobile app.
+   - We subscribe to `agent.cascadeStream` to sync the complete conversation history natively and in real-time, eliminating the need to parse local transcript files.
 
-If Antigravity is not running, messages fall back to file-based delivery and will be processed when the app is opened.
-
-You can check if the Language Server is available via the REST endpoint:
-```
-GET /api/ls-status
-→ {"available": true, "pid": 16808, "port": 52268, "method": "agentapi"}
-```
+This provides an incredibly fast, robust, and lag-free experience.
 
 ## Features
-- **Real-time Sync**: Uses WebSockets to stream AI responses instantly to the phone.
-- **Image Uploads**: Supports uploading images from the phone's gallery directly into the Antigravity chat context.
-- **Native Agent Wakeup**: Uses AgentAPI to instantly wake up the Antigravity agent when a message arrives from the mobile app — no manual scripts needed.
-- **Auto-Discovery**: Automatically finds the running Language Server on startup, no configuration required.
+- **True Native Sync**: Uses the official LS RPC for pixel-perfect sync of the conversation.
+- **Real-time Status**: Watch the AI "think" and "execute tools" live on your phone.
+- **Image Uploads**: Supports sending images from the phone's gallery directly to the AI.
+- **Zero Config**: Automatically finds and connects to your local Antigravity Language Server securely.
 
 ## License
 MIT License

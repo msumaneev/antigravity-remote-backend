@@ -34,17 +34,18 @@ function initDiscovery() {
             return;
         // Step 2: Find ports via netstat
         const netstatOutput = execSync('netstat -ano -p TCP', { encoding: 'utf8', timeout: 5000, windowsHide: true });
-        const httpPort = parseNetstatOutput(netstatOutput, result.pid);
-        if (!httpPort)
+        const ports = parseNetstatOutput(netstatOutput, result.pid);
+        if (!ports)
             return;
         cachedDiscovery = {
             pid: result.pid,
             csrfToken: result.csrfToken,
-            httpPort,
-            address: `localhost:${httpPort}`,
+            httpPort: ports.max,
+            httpsPort: ports.min,
+            address: `localhost:${ports.max}`,
             agentApiPath: getAgentApiPath(),
         };
-        console.log(`[Discovery] Found Language Server: PID=${result.pid}, Port=${httpPort}, CSRF=${result.csrfToken.substring(0, 8)}...`);
+        console.log(`[Discovery] Found Language Server: PID=${result.pid}, HTTP=${ports.max}, HTTPS=${ports.min}, CSRF=${result.csrfToken.substring(0, 8)}...`);
     }
     catch (err) {
         console.error('[Discovery] Init error:', err);
@@ -75,19 +76,20 @@ function refreshDiscoveryAsync() {
                 cachedDiscovery = null;
                 return;
             }
-            const httpPort = parseNetstatOutput(stdout2, result.pid);
-            if (!httpPort) {
+            const ports = parseNetstatOutput(stdout2, result.pid);
+            if (!ports) {
                 cachedDiscovery = null;
                 return;
             }
             cachedDiscovery = {
                 pid: result.pid,
                 csrfToken: result.csrfToken,
-                httpPort,
-                address: `localhost:${httpPort}`,
+                httpPort: ports.max,
+                httpsPort: ports.min,
+                address: `localhost:${ports.max}`,
                 agentApiPath: getAgentApiPath(),
             };
-            console.log(`[Discovery] Refreshed: PID=${result.pid}, Port=${httpPort}`);
+            console.log(`[Discovery] Refreshed: PID=${result.pid}, HTTP=${ports.max}, HTTPS=${ports.min}`);
         });
     });
 }
@@ -114,7 +116,7 @@ function parseNetstatOutput(output, pid) {
                 ports.push(parseInt(match[1], 10));
         }
     }
-    return ports.length > 0 ? Math.max(...ports) : null;
+    return ports.length > 0 ? { min: Math.min(...ports), max: Math.max(...ports) } : null;
 }
 function getAgentApiPath() {
     return path_1.default.join(os_1.default.homedir(), 'AppData', 'Local', 'Programs', 'Antigravity', 'resources', 'bin', 'language_server.exe');

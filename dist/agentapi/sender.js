@@ -17,9 +17,13 @@ const BRAIN_DIR = path_1.default.join(os_1.default.homedir(), '.gemini', 'antigr
  * Primary: Uses AgentAPI CLI which natively wakes the agent.
  * Fallback: Writes a JSON message file (requires waitForMessage.js or manual check).
  */
-async function sendMessage(conversationId, rawContent) {
+async function sendMessage(conversationId, rawContent, model) {
+    let settingsInjection = '';
+    if (model) {
+        settingsInjection = `<USER_SETTINGS_CHANGE>\nThe user changed setting \`Model Selection\` to ${model}.\n</USER_SETTINGS_CHANGE>\n`;
+    }
     // Wrap in USER_REQUEST tags so the agent sees it as a user message
-    const content = `<USER_REQUEST>\n[Отправлено с телефона]: ${rawContent.trim()}\n</USER_REQUEST>`;
+    const content = `${settingsInjection}<USER_REQUEST>\n[Отправлено с телефона]: ${rawContent.trim()}\n</USER_REQUEST>`;
     // Try AgentAPI first
     const result = await sendViaAgentAPI(conversationId, content);
     if (result.success) {

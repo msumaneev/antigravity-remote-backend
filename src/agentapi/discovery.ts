@@ -6,6 +6,7 @@ export interface LSDiscovery {
     pid: number;
     csrfToken: string;
     httpPort: number;
+    httpsPort: number;
     address: string;
     agentApiPath: string;
 }
@@ -46,18 +47,19 @@ export function initDiscovery(): void {
             { encoding: 'utf8', timeout: 5000, windowsHide: true }
         );
 
-        const httpPort = parseNetstatOutput(netstatOutput, result.pid);
-        if (!httpPort) return;
+        const ports = parseNetstatOutput(netstatOutput, result.pid);
+        if (!ports) return;
 
         cachedDiscovery = {
             pid: result.pid,
             csrfToken: result.csrfToken,
-            httpPort,
-            address: `localhost:${httpPort}`,
+            httpPort: ports.max,
+            httpsPort: ports.min,
+            address: `localhost:${ports.max}`,
             agentApiPath: getAgentApiPath(),
         };
 
-        console.log(`[Discovery] Found Language Server: PID=${result.pid}, Port=${httpPort}, CSRF=${result.csrfToken.substring(0, 8)}...`);
+        console.log(`[Discovery] Found Language Server: PID=${result.pid}, HTTP=${ports.max}, HTTPS=${ports.min}, CSRF=${result.csrfToken.substring(0, 8)}...`);
     } catch (err) {
         console.error('[Discovery] Init error:', err);
     }
@@ -91,8 +93,8 @@ function refreshDiscoveryAsync(): void {
                 return;
             }
 
-            const httpPort = parseNetstatOutput(stdout2, result.pid);
-            if (!httpPort) {
+            const ports = parseNetstatOutput(stdout2, result.pid);
+            if (!ports) {
                 cachedDiscovery = null;
                 return;
             }
@@ -100,11 +102,12 @@ function refreshDiscoveryAsync(): void {
             cachedDiscovery = {
                 pid: result.pid,
                 csrfToken: result.csrfToken,
-                httpPort,
-                address: `localhost:${httpPort}`,
+                httpPort: ports.max,
+                httpsPort: ports.min,
+                address: `localhost:${ports.max}`,
                 agentApiPath: getAgentApiPath(),
             };
-            console.log(`[Discovery] Refreshed: PID=${result.pid}, Port=${httpPort}`);
+            console.log(`[Discovery] Refreshed: PID=${result.pid}, HTTP=${ports.max}, HTTPS=${ports.min}`);
         });
     });
 }
@@ -124,7 +127,7 @@ function parseWmicOutput(output: string): { pid: number; csrfToken: string } | n
     return { pid, csrfToken: csrfMatch[1] };
 }
 
-function parseNetstatOutput(output: string, pid: number): number | null {
+function parseNetstatOutput(output: string, pid: number): { min: number, max: number } | null {
     const ports: number[] = [];
     const pidStr = String(pid);
     
@@ -135,7 +138,7 @@ function parseNetstatOutput(output: string, pid: number): number | null {
         }
     }
 
-    return ports.length > 0 ? Math.max(...ports) : null;
+    return ports.length > 0 ? { min: Math.min(...ports), max: Math.max(...ports) } : null;
 }
 
 function getAgentApiPath(): string {

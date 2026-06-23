@@ -4,14 +4,19 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupRoutes = setupRoutes;
+const express_1 = __importDefault(require("express"));
 const parser_1 = require("../history/parser");
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const manager_1 = require("../pty/manager");
 const sender_1 = require("../agentapi/sender");
 const discovery_1 = require("../agentapi/discovery");
+const stateStream_1 = require("../agentapi/stateStream");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const https_1 = __importDefault(require("https"));
+const rpc_1 = require("../agentapi/rpc");
+const cascadeStream_1 = require("../agentapi/cascadeStream");
 const GEMINI_DIR = path_1.default.join(os_1.default.homedir(), '.gemini');
 const BRAIN_DIR = path_1.default.join(GEMINI_DIR, 'antigravity', 'brain');
 function extractTitle(dir, id) {
@@ -90,6 +95,17 @@ function extractSubtitle(dir) {
     }
     catch (e) { }
     return '';
+}
+let cachedProjectsTree = null;
+let lastCacheTime = 0;
+async function getCachedProjectsTree() {
+    const now = Date.now();
+    if (cachedProjectsTree && (now - lastCacheTime < 10000)) {
+        return cachedProjectsTree;
+    }
+    cachedProjectsTree = await getProjectsTree();
+    lastCacheTime = now;
+    return cachedProjectsTree;
 }
 async function getProjectsTree() {
     const projectsConfigDir = path_1.default.join(GEMINI_DIR, 'config', 'projects');
@@ -239,11 +255,70 @@ async function getProjectsTree() {
     });
     return result;
 }
+function transformTrajectoriesToProjectTree(summaries) {
+    const projects = new Map();
+    const conversationsDbDir = path_1.default.join(GEMINI_DIR, 'antigravity', 'conversations');
+    const archivedChatsPath = path_1.default.join(conversationsDbDir, 'archived_chats.json');
+    let archivedChats = new Set();
+    if (fs_1.default.existsSync(archivedChatsPath)) {
+        try {
+            archivedChats = new Set(JSON.parse(fs_1.default.readFileSync(archivedChatsPath, 'utf-8')));
+        }
+        catch (e) { }
+    }
+    for (const [convId, traj] of Object.entries(summaries)) {
+        if (archivedChats.has(convId))
+            continue;
+        const projectName = decodeURIComponent(traj.workspaceName || 'Unknown');
+        if (!projects.has(projectName)) {
+            projects.set(projectName, {
+                id: projectName,
+                name: projectName,
+                projectName,
+                projectPath: traj.workspaceUri || '',
+                conversations: [],
+            });
+        }
+        projects.get(projectName).conversations.push({
+            id: convId,
+            projectId: projectName,
+            parentId: null,
+            title: traj.summary?.substring(0, 100) || 'New Chat',
+            subtitle: `${traj.stepCount} steps`,
+            updatedAt: traj.lastModifiedTime ? new Date(traj.lastModifiedTime).getTime() : 0,
+            status: traj.status,
+            subagents: [],
+        });
+    }
+    return [...projects.values()]
+        .map(p => ({
+        ...p,
+        conversations: p.conversations.sort((a, b) => b.updatedAt - a.updatedAt),
+    }))
+        .sort((a, b) => {
+        const aTime = a.conversations[0]?.updatedAt || 0;
+        const bTime = b.conversations[0]?.updatedAt || 0;
+        return bTime - aTime;
+    });
+}
 const multer_1 = __importDefault(require("multer"));
 // Configure multer to save files in a temporary directory or directly to the target conversation if possible.
 // We'll use memory storage and write it manually to the right place so we can use conversationId.
 const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
+const cascadeStreams = new Map();
 function setupRoutes(app, wss) {
+    // Serve APK for easy Wi-Fi installation
+    app.use('/download-apk', express_1.default.static(path_1.default.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
+    // Start listening to agent state updates
+    stateStream_1.agentStateStream.connect();
+    stateStream_1.agentStateStream.on('state', (stateObj) => {
+        const payload = JSON.stringify({ type: 'AGENT_STATE', data: stateObj });
+        wss.clients.forEach(client => {
+            if (client.readyState === 1) { // 1 = OPEN
+                client.send(payload);
+            }
+        });
+    });
     // REST: Check Language Server status (is Antigravity running?)
     app.get('/api/ls-status', (req, res) => {
         const discovery = (0, discovery_1.discoverLanguageServer)(true);
@@ -261,6 +336,280 @@ function setupRoutes(app, wss) {
                 method: 'file-fallback',
                 warning: 'Language Server not found. Messages will be queued but agent won\'t wake automatically.',
             });
+        }
+    });
+    app.get('/api/trajectories', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetAllCascadeTrajectories');
+            const tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
+            res.json(tree);
+        }
+        catch (err) {
+            const tree = await getCachedProjectsTree();
+            res.json(tree);
+        }
+    });
+    app.get('/api/models', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetCascadeModelConfigData');
+            res.json(data.clientModelConfigs || []);
+        }
+        catch (err) {
+            res.status(503).json({ error: 'Language Server unavailable' });
+        }
+    });
+    app.get('/api/health', async (req, res) => {
+        try {
+            const heartbeat = await (0, rpc_1.callRPC)('Heartbeat', {}, { timeoutMs: 2000 });
+            const ls = (0, discovery_1.discoverLanguageServer)();
+            res.json({
+                ok: true,
+                lsRunning: !!ls,
+                lastHeartbeat: heartbeat.lastExtensionHeartbeat,
+                pid: ls?.pid,
+            });
+        }
+        catch {
+            res.json({ ok: true, lsRunning: false });
+        }
+    });
+    app.get('/api/account', async (req, res) => {
+        try {
+            const [userStatus, profile] = await Promise.all([
+                (0, rpc_1.callRPC)('GetUserStatus', {}, { timeoutMs: 3000 }),
+                (0, rpc_1.callRPC)('GetProfileData', {}, { timeoutMs: 3000 }),
+            ]);
+            res.json({
+                name: userStatus.userStatus?.name,
+                email: userStatus.userStatus?.email,
+                plan: userStatus.userStatus?.planStatus?.planInfo?.planName,
+                monthlyPromptCredits: userStatus.userStatus?.planStatus?.planInfo?.monthlyPromptCredits,
+                monthlyFlowCredits: userStatus.userStatus?.planStatus?.planInfo?.monthlyFlowCredits,
+                avatarUrl: profile.profilePictureUrl,
+            });
+        }
+        catch (err) {
+            res.status(503).json({ error: 'Failed to get account info' });
+        }
+    });
+    app.get('/api/mcp', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetMcpServerStates');
+            res.json(data.states || []);
+        }
+        catch (err) {
+            res.status(503).json({ error: 'Failed to get MCP states' });
+        }
+    });
+    app.post('/api/mcp/toggle', async (req, res) => {
+        try {
+            const { serverName } = req.body;
+            await (0, rpc_1.callRPC)('ToggleMcpServer', { serverName });
+            res.json({ success: true });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/mcp/refresh', async (req, res) => {
+        try {
+            await (0, rpc_1.callRPC)('RefreshMcpServers');
+            res.json({ success: true });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/search', async (req, res) => {
+        const query = req.query.q;
+        console.log('[Search] Received query:', JSON.stringify(query));
+        if (!query)
+            return res.json([]);
+        try {
+            const lowerQuery = query.toLowerCase();
+            const projects = await getCachedProjectsTree();
+            const results = [];
+            function searchConv(conv) {
+                if (conv.title?.toLowerCase().includes(lowerQuery) ||
+                    conv.subtitle?.toLowerCase().includes(lowerQuery)) {
+                    results.push({
+                        cascadeId: conv.id,
+                        title: conv.title,
+                        snippet: conv.subtitle || ''
+                    });
+                }
+                if (conv.subagents && Array.isArray(conv.subagents)) {
+                    for (const sub of conv.subagents) {
+                        searchConv(sub);
+                    }
+                }
+            }
+            for (const project of projects) {
+                if (project.conversations) {
+                    for (const conv of project.conversations) {
+                        searchConv(conv);
+                    }
+                }
+            }
+            res.json(results);
+        }
+        catch (err) {
+            res.status(503).json({ error: 'Search unavailable' });
+        }
+    });
+    app.get('/api/turn-diff/:conversationId', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetTurnDiff', {
+                conversationId: req.params.conversationId
+            });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/files', async (req, res) => {
+        const uri = req.query.uri;
+        try {
+            const data = await (0, rpc_1.callRPC)('ReadDir', { uri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/file', async (req, res) => {
+        const uri = req.query.uri;
+        try {
+            const data = await (0, rpc_1.callRPC)('ReadFile', { uri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    // --- PHASE 3 ---
+    // GIT Endpoints
+    app.get('/api/git/state', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetVersionControlState', { workspaceUri: req.query.workspaceUri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/git/file', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetVersionControlFileContent', { uri: req.query.uri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/git/commit', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GenerateCommitMessage', { repository: req.body.repository });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/git/diff', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetWorktreeDiff', { worktreeDirUri: req.query.worktreeDirUri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    // Customization Endpoints
+    app.get('/api/customizations/skills', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetAllSkills');
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/customizations/plugins', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetAllPlugins');
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/customizations/rules', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetAllRules');
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/customizations/marketplace', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetAvailableCascadePlugins');
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/customizations/install', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('InstallCascadePlugin', { pluginId: req.body.pluginId });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/customizations/delete', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('DeletePlugin', { pluginId: req.body.pluginId });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    // Search Endpoints
+    app.get('/api/search/code', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('SearchCode', { query: req.query.query, workspaceUri: req.query.workspaceUri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.get('/api/search/files', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('SearchFiles', { query: req.query.query, workspaceUri: req.query.workspaceUri });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    // Slash commands
+    app.get('/api/slash-commands', async (req, res) => {
+        try {
+            const data = await (0, rpc_1.callRPC)('GetSlashCommands', {
+                requestedModel: { model: req.query.model || 'MODEL_CHAT_20706' }
+            });
+            res.json(data);
+        }
+        catch (err) {
+            res.status(503).json({ error: 'Unavailable' });
         }
     });
     // REST: Upload image to a conversation
@@ -297,7 +646,7 @@ function setupRoutes(app, wss) {
     // REST: Get available projects
     app.get('/api/projects', async (req, res) => {
         try {
-            const projects = await getProjectsTree();
+            const projects = await getCachedProjectsTree();
             res.json(projects);
         }
         catch (error) {
@@ -388,7 +737,7 @@ function setupRoutes(app, wss) {
                     else if (msg.conversationId) {
                         const conversationId = msg.conversationId;
                         try {
-                            const result = await (0, sender_1.sendMessage)(conversationId, msg.data);
+                            const result = await (0, sender_1.sendMessage)(conversationId, msg.data, msg.model);
                             if (result.success) {
                                 ws.send(JSON.stringify({
                                     type: 'EVENT',
@@ -411,11 +760,116 @@ function setupRoutes(app, wss) {
                         }
                     }
                 }
+                else if (msg.type === 'APPROVE_INTERACTION' || msg.type === 'REJECT_INTERACTION') {
+                    if (msg.conversationId && msg.interactionPayload) {
+                        const isApprove = msg.type === 'APPROVE_INTERACTION';
+                        let finalInteraction = msg.interactionPayload;
+                        if (!isApprove) {
+                            // Deny Interaction logic
+                            const COMMON = new Set(['trajectoryId', 'stepIndex', 'timedOut']);
+                            const out = {};
+                            for (const [key, val] of Object.entries(finalInteraction)) {
+                                if (COMMON.has(key) || val === null || typeof val !== 'object') {
+                                    out[key] = val;
+                                    continue;
+                                }
+                                if (key === 'filePermission') {
+                                    out[key] = { absolutePathUri: val.absolutePathUri };
+                                    continue;
+                                }
+                                const member = { ...val };
+                                if ('confirm' in member)
+                                    member.confirm = false;
+                                if ('allow' in member)
+                                    member.allow = false;
+                                if ('cancel' in member)
+                                    member.cancel = true;
+                                if ('cancelled' in member)
+                                    member.cancelled = true;
+                                out[key] = member;
+                            }
+                            finalInteraction = out;
+                        }
+                        const body = {
+                            cascadeId: msg.conversationId,
+                            interaction: finalInteraction
+                        };
+                        const ls = (0, discovery_1.discoverLanguageServer)();
+                        if (ls) {
+                            const req = https_1.default.request({
+                                hostname: 'localhost',
+                                port: ls.httpsPort,
+                                path: '/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction',
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Connect-Protocol-Version': '1',
+                                    'X-Codeium-Csrf-Token': ls.csrfToken
+                                },
+                                rejectUnauthorized: false
+                            }, (res) => {
+                                console.log(`[Interaction] ${isApprove ? 'Approved' : 'Rejected'}, status=${res.statusCode}`);
+                            });
+                            req.on('error', (e) => console.error('[Interaction] Error:', e));
+                            req.write(JSON.stringify(body));
+                            req.end();
+                        }
+                        else {
+                            console.error('[Interaction] No Language Server found to handle interaction');
+                        }
+                    }
+                }
                 else if (msg.type === 'KILL') {
                     if (currentPtyProcess) {
                         (0, manager_1.killAntigravity)(currentPtyProcess);
                         currentPtyProcess = null;
                         ws.send(JSON.stringify({ type: 'EVENT', data: 'Process killed by user' }));
+                    }
+                }
+                else if (msg.type === 'LIST_CONVERSATIONS_V2') {
+                    try {
+                        const data = await (0, rpc_1.callRPC)('GetAllCascadeTrajectories');
+                        const tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
+                        ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
+                    }
+                    catch (err) {
+                        try {
+                            const tree = await getProjectsTree();
+                            ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
+                        }
+                        catch (fallbackErr) {
+                            console.error('[WebSocket] Error in LIST_CONVERSATIONS_V2 fallback:', fallbackErr);
+                            ws.send(JSON.stringify({ type: 'ERROR', error: String(fallbackErr) }));
+                        }
+                    }
+                }
+                else if (msg.type === 'GET_MODELS') {
+                    try {
+                        const data = await (0, rpc_1.callRPC)('GetCascadeModelConfigData');
+                        ws.send(JSON.stringify({ type: 'MODELS_LIST', data: data.clientModelConfigs || [] }));
+                    }
+                    catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: 'Failed to get models' }));
+                    }
+                }
+                else if (msg.type === 'STOP_AGENT') {
+                    try {
+                        const { conversationId } = msg;
+                        await (0, rpc_1.callRPC)('ForceStopCascadeTree', { conversationId });
+                        ws.send(JSON.stringify({ type: 'EVENT', data: 'Agent stopped' }));
+                    }
+                    catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: `Failed to stop: ${err.message}` }));
+                    }
+                }
+                else if (msg.type === 'FORK_CONVERSATION') {
+                    try {
+                        const { conversationId } = msg;
+                        const data = await (0, rpc_1.callRPC)('ForkConversation', { sourceCascadeId: conversationId });
+                        ws.send(JSON.stringify({ type: 'FORK_RESULT', data }));
+                    }
+                    catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: err.message }));
                     }
                 }
                 else if (msg.type === 'LIST_CONVERSATIONS') {
@@ -465,6 +919,15 @@ function setupRoutes(app, wss) {
                         ws.send(JSON.stringify({ type: 'ERROR', error: String(err) }));
                     }
                     // Setup real-time watching
+                    const conversationId = msg.id;
+                    if (!cascadeStreams.has(conversationId)) {
+                        const stream = new cascadeStream_1.CascadeReactiveStream(conversationId);
+                        stream.on('update', (data) => {
+                            ws.send(JSON.stringify({ type: 'CASCADE_UPDATE', data }));
+                        });
+                        stream.connect();
+                        cascadeStreams.set(conversationId, stream);
+                    }
                     if (!msg.offset) {
                         try {
                             const id = msg.id;
