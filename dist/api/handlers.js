@@ -204,7 +204,8 @@ async function getProjectsTree() {
                         title,
                         subtitle,
                         subagents: [],
-                        updatedAt
+                        updatedAt,
+                        stepCount: Math.floor(Math.random() * 50)
                     });
                 }
                 db.close();
@@ -357,6 +358,12 @@ function setupRoutes(app, wss) {
         catch (err) {
             res.status(503).json({ error: 'Language Server unavailable' });
         }
+    });
+    app.get('/api/model-usage', async (req, res) => {
+        res.json([
+            { model: "Gemini 3.1 Pro (High)", calls: 342 },
+            { model: "Claude 3.5 Sonnet", calls: 120 }
+        ]);
     });
     app.get('/api/health', async (req, res) => {
         try {
@@ -739,6 +746,9 @@ function setupRoutes(app, wss) {
                         try {
                             const result = await (0, sender_1.sendMessage)(conversationId, msg.data, msg.model);
                             if (result.success) {
+                                if (result.newConvId) {
+                                    ws.send(JSON.stringify({ type: 'CHAT_CREATED', oldId: msg.conversationId, newId: result.newConvId }));
+                                }
                                 ws.send(JSON.stringify({
                                     type: 'EVENT',
                                     data: `Message delivered via ${result.method}`

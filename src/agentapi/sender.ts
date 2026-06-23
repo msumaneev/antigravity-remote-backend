@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { discoverLanguageServer, invalidateDiscovery } from './discovery';
 import fs from 'fs';
 import path from 'path';
@@ -9,8 +9,9 @@ const BRAIN_DIR = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
 
 interface SendResult {
     success: boolean;
-    method: 'agentapi' | 'file';
+    method: 'agentapi' | 'file' | 'direct_spawn';
     error?: string;
+    newConvId?: string;
 }
 
 /**
@@ -51,6 +52,22 @@ async function sendViaAgentAPI(conversationId: string, content: string): Promise
     const discovery = discoverLanguageServer();
     if (!discovery) {
         return { success: false, method: 'agentapi', error: 'Language Server not found' };
+    }
+
+    if (conversationId.startsWith('START_NEW_AGENT_')) {
+        const workspaceUri = conversationId.replace('START_NEW_AGENT_', '');
+        const newConvId = crypto.randomUUID();
+        
+        sendViaFile(newConvId, content);
+
+        const lsPath = discovery.agentApiPath.replace('agentapi.exe', 'language_server.exe');
+        const child = spawn(lsPath, ['run', '--root', workspaceUri.replace('file:///', ''), '--conversation-id', newConvId, '--no-browser'], {
+            detached: true,
+            stdio: 'ignore'
+        });
+        child.unref();
+
+        return { success: true, method: 'direct_spawn', newConvId };
     }
 
     return new Promise((resolve) => {

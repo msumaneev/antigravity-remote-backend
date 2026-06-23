@@ -7,6 +7,7 @@ Seamlessly interact with your Antigravity Language Server from your phone. Send 
 > Built for **Antigravity 2.1.4**, which runs a single shared **hub** Language Server. The backend auto-detects the hub, authenticates, and streams the full conversation natively.
 > 
 > *Looking for a web dashboard? Check out [Antigravity Deck](https://github.com/tysonnbt/Antigravity-Deck).*
+> *The Android app UI takes significant inspiration from the beautiful design of Antigravity Deck.*
 
 ---
 

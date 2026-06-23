@@ -10,6 +10,19 @@ const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const handlers_1 = require("./api/handlers");
 const discovery_1 = require("./agentapi/discovery");
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+// Read version from package.json
+const packageJsonPath = path_1.default.join(__dirname, '../package.json');
+let SERVER_VERSION = '2.0.0';
+try {
+    const pkg = JSON.parse(fs_1.default.readFileSync(packageJsonPath, 'utf-8'));
+    if (pkg.version)
+        SERVER_VERSION = pkg.version;
+}
+catch (e) {
+    console.error('Failed to read package.json version', e);
+}
 dotenv_1.default.config();
 (0, discovery_1.initDiscovery)(); // Discover Language Server at startup (sync, one-time)
 const app = (0, express_1.default)();
@@ -56,7 +69,8 @@ setInterval(() => {
         type: 'SERVER_STATS',
         data: {
             cpu: cpuPercent,
-            ram: ramPercent
+            ram: ramPercent,
+            version: SERVER_VERSION
         }
     });
     wss.clients.forEach(client => {

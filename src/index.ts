@@ -5,6 +5,18 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { setupRoutes } from './api/handlers';
 import { initDiscovery } from './agentapi/discovery';
+import fs from 'fs';
+import path from 'path';
+
+// Read version from package.json
+const packageJsonPath = path.join(__dirname, '../package.json');
+let SERVER_VERSION = '2.0.0';
+try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+    if (pkg.version) SERVER_VERSION = pkg.version;
+} catch (e) {
+    console.error('Failed to read package.json version', e);
+}
 
 dotenv.config();
 initDiscovery(); // Discover Language Server at startup (sync, one-time)
@@ -66,7 +78,8 @@ setInterval(() => {
         type: 'SERVER_STATS',
         data: {
             cpu: cpuPercent,
-            ram: ramPercent
+            ram: ramPercent,
+            version: SERVER_VERSION
         }
     });
 

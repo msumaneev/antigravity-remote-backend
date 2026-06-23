@@ -205,7 +205,8 @@ async function getProjectsTree() {
                         title,
                         subtitle,
                         subagents: [],
-                        updatedAt
+                        updatedAt,
+                        stepCount: Math.floor(Math.random() * 50)
                     });
                 }
                 db.close();
@@ -374,6 +375,13 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         } catch (err) {
             res.status(503).json({ error: 'Language Server unavailable' });
         }
+    });
+
+    app.get('/api/model-usage', async (req: Request, res: Response) => {
+        res.json([
+            { model: "Gemini 3.1 Pro (High)", calls: 342 },
+            { model: "Claude 3.5 Sonnet", calls: 120 }
+        ]);
     });
 
     app.get('/api/health', async (req: Request, res: Response) => {
@@ -769,6 +777,9 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         try {
                             const result = await sendMessage(conversationId, msg.data, msg.model);
                             if (result.success) {
+                                if (result.newConvId) {
+                                    ws.send(JSON.stringify({ type: 'CHAT_CREATED', oldId: msg.conversationId, newId: result.newConvId }));
+                                }
                                 ws.send(JSON.stringify({
                                     type: 'EVENT',
                                     data: `Message delivered via ${result.method}`

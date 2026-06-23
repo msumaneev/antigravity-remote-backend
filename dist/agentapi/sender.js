@@ -41,6 +41,18 @@ async function sendViaAgentAPI(conversationId, content) {
     if (!discovery) {
         return { success: false, method: 'agentapi', error: 'Language Server not found' };
     }
+    if (conversationId.startsWith('START_NEW_AGENT_')) {
+        const workspaceUri = conversationId.replace('START_NEW_AGENT_', '');
+        const newConvId = crypto_1.default.randomUUID();
+        sendViaFile(newConvId, content);
+        const lsPath = discovery.agentApiPath.replace('agentapi.exe', 'language_server.exe');
+        const child = (0, child_process_1.spawn)(lsPath, ['run', '--root', workspaceUri.replace('file:///', ''), '--conversation-id', newConvId, '--no-browser'], {
+            detached: true,
+            stdio: 'ignore'
+        });
+        child.unref();
+        return { success: true, method: 'direct_spawn', newConvId };
+    }
     return new Promise((resolve) => {
         const env = {
             PATH: process.env.PATH || '',
