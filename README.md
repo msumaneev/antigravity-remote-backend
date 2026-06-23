@@ -4,6 +4,8 @@ This is the backend server for the **Antigravity Remote** Android application. I
 
 With our latest update, the backend has been completely rewritten to interface directly with the Antigravity Language Server via its internal **RPC Protocol** over WebSockets, bringing a true native IDE experience to your mobile device.
 
+> **Note:** We also use [AntiGravity Deck](https://github.com/msumaneev/antigravity-deck) alongside this as a powerful dashboard and idea generator.
+
 ## Installation
 
 1. **Clone the repository:**
