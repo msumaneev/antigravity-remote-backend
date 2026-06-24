@@ -1,6 +1,6 @@
 @echo off
 echo Starting backend update process...
-timeout /t 3 /nobreak
+ping 127.0.0.1 -n 4 > nul
 git pull origin master
 call npm install
 call npm run build

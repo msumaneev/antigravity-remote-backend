@@ -30,6 +30,10 @@ The backend connects directly to the Antigravity Language Server (LS) exactly li
 - **Image Uploads** — Supports sending images from your phone's gallery directly to the Antigravity cascade.
 - **Remote Access** — Expose this server via Tailscale to control your local AI from anywhere in the world.
 
+### 🔄 Self-Updating Server
+- **One-Click Updates** — When the Android client connects, it compares the running backend version against the required target version. If the backend is outdated, a button with `(Update available: [new version])` is displayed in the app.
+- **Detached Execution Lifecycle** — Tapping "Update" triggers an API call that spawns a detached platform-specific update script (`update.bat` / `update.sh`), terminates the WebSocket server, pulls the latest code from GitHub, installs packages, rebuilds the server, and automatically boots the new version.
+
 ### 🔔 Push Notifications Architecture
 The application uses a **direct local connection** system for push notifications, bypassing external cloud messaging servers (like Google FCM or APNs):
 - **WebSocket & Foreground Service** — To prevent Android from killing background tasks and terminating the connection, the mobile app runs a persistent Foreground Service that keeps a direct WebSocket connection active to your backend.
