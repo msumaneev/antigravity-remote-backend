@@ -30,12 +30,12 @@ The backend connects directly to the Antigravity Language Server (LS) exactly li
 - **Image Uploads** — Supports sending images from your phone's gallery directly to the Antigravity cascade.
 - **Remote Access** — Expose this server via Tailscale to control your local AI from anywhere in the world.
 
-### 🔔 Push Notifications (Архитектура)
-Для работы пуш-уведомлений на телефоне используется система **прямого локального соединения** без зависимости от внешних серверов Google/Apple (FCM):
-- **WebSocket & Foreground Service** — Чтобы Android не убивал соединение в фоновом режиме, мобильное приложение запускает активную фоновую службу (Foreground Service), удерживающую постоянное WebSocket-подключение к вашему бэкенду.
-- **Изолированное отслеживание статуса** — Статусы агента (`THINKING` / `IDLE`) отслеживаются изолированно для каждого чата на бэкенде и на клиенте. Звуковое уведомление присылается строго в момент перехода конкретной задачи из выполнения в режим ожидания (`IDLE`).
-- **Фильтрация фонового спама** — Приложение автоматически отфильтровывает статусы фоновых сабагентов и подзадач, отправляя уведомления только по основным чатам, которые запустил пользователь.
-- **Отключение плашки службы** — По правилам Android фоновая служба обязана показывать постоянное уведомление в шторке. Его можно легко скрыть: зайдите в настройки уведомлений приложения на телефоне и отключите категорию **«Silent Connection Service»**. При этом важные пуши со звуком о завершении работы продолжат приходить как обычно.
+### 🔔 Push Notifications Architecture
+The application uses a **direct local connection** system for push notifications, bypassing external cloud messaging servers (like Google FCM or APNs):
+- **WebSocket & Foreground Service** — To prevent Android from killing background tasks and terminating the connection, the mobile app runs a persistent Foreground Service that keeps a direct WebSocket connection active to your backend.
+- **Isolated Status Tracking** — Agent statuses (`THINKING` / `IDLE`) are tracked independently for each conversation on both the backend and client. A sound notification is triggered only when a specific task transitions from running to the idle (`IDLE`) state.
+- **Background Spam Filtering** — The app automatically filters out status updates from background subagents and auxiliary runs, ensuring notifications are sent only for the primary chats initiated by the user.
+- **Hiding the Persistent Notification** — According to Android security rules, a Foreground Service must display a persistent notification in the status bar. You can easily hide it by going to the app's notification settings on your phone and disabling the **"Silent Connection Service"** category. This will keep your status bar clean while ensuring high-priority sound notifications for finished tasks continue to work normally.
 
 ---
 
