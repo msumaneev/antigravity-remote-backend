@@ -367,9 +367,44 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             res.json({
                 available: false,
                 method: 'file-fallback',
-                warning: 'Language Server not found. Messages will be queued but agent won\'t wake automatically.',
             });
         }
+    });
+
+    app.post('/api/update-server', (req: Request, res: Response) => {
+        const isWindows = process.platform === 'win32';
+        const scriptPath = path.join(__dirname, '..', '..', 'scripts', isWindows ? 'update.bat' : 'update.sh');
+        
+        console.log(`[Update] Received update request. Spawning update script: ${scriptPath}`);
+        
+        if (!fs.existsSync(scriptPath)) {
+            res.status(500).json({ success: false, error: 'Update script not found' });
+            return;
+        }
+
+        // Send success response to client first so it doesn't hang
+        res.json({ success: true, message: 'Update process initiated. Server is restarting.' });
+
+        // Close WebSocket server to release connections immediately
+        try {
+            wss.close();
+        } catch (e) {}
+
+        // Spawn update script detached and exit
+        const { spawn } = require('child_process');
+        const child = spawn(isWindows ? scriptPath : 'bash', isWindows ? [] : [scriptPath], {
+            detached: true,
+            stdio: 'ignore',
+            cwd: path.join(__dirname, '..', '..')
+        });
+
+        child.unref();
+
+        // Give process brief moment to detach and then exit
+        setTimeout(() => {
+            console.log('[Update] Exiting process to allow update script to run.');
+            process.exit(0);
+        }, 500);
     });
 
     app.get('/api/trajectories', async (req: Request, res: Response) => {
