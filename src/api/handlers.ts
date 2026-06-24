@@ -1,12 +1,11 @@
 import express, { Express, Request, Response } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
-import { getProjects } from '../scanner/projects';
 import { readTranscript } from '../history/parser';
 import Database from 'better-sqlite3';
 import { spawnAntigravity, killAntigravity } from '../pty/manager';
 import { sendMessage } from '../agentapi/sender';
 import { discoverLanguageServer } from '../agentapi/discovery';
-import { agentStateStream } from '../agentapi/stateStream';
+import { AgentStateStream } from '../agentapi/stateStream';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -206,7 +205,7 @@ async function getProjectsTree() {
                         subtitle,
                         subagents: [],
                         updatedAt,
-                        stepCount: Math.floor(Math.random() * 50)
+                        stepCount: 0
                     });
                 }
                 db.close();
@@ -280,7 +279,14 @@ function transformTrajectoriesToProjectTree(summaries: Record<string, any>): any
     for (const [convId, traj] of Object.entries(summaries)) {
         if (archivedChats.has(convId)) continue;
         
-        const projectName = decodeURIComponent(traj.workspaceName || 'Unknown');
+        let rawProjectName = traj.workspaceName;
+        if (!rawProjectName && traj.workspaceUri) {
+            const decoded = decodeURIComponent(traj.workspaceUri);
+            const parts = decoded.replace(/\/$/, '').split('/');
+            rawProjectName = parts[parts.length - 1] || 'Unknown';
+        }
+        
+        const projectName = decodeURIComponent(rawProjectName || 'Unknown');
         if (!projects.has(projectName)) {
             projects.set(projectName, {
                 id: projectName,
@@ -322,14 +328,15 @@ import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage() });
 
 const cascadeStreams = new Map<string, CascadeReactiveStream>();
+const agentStateStreams = new Map<string, AgentStateStream>();
 
-export function setupRoutes(app: Express, wss: WebSocketServer) {
-    // Serve APK for easy Wi-Fi installation
-    app.use('/download-apk', express.static(path.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
-    
-    // Start listening to agent state updates
-    agentStateStream.connect();
-    agentStateStream.on('state', (stateObj) => {
+export function getOrCreateAgentStateStream(conversationId: string, wss: WebSocketServer) {
+    if (!conversationId) return null;
+    if (agentStateStreams.has(conversationId)) {
+        return agentStateStreams.get(conversationId)!;
+    }
+    const stream = new AgentStateStream(conversationId);
+    stream.on('state', (stateObj) => {
         const payload = JSON.stringify({ type: 'AGENT_STATE', data: stateObj });
         wss.clients.forEach(client => {
             if (client.readyState === 1) { // 1 = OPEN
@@ -337,6 +344,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             }
         });
     });
+    stream.connect();
+    agentStateStreams.set(conversationId, stream);
+    return stream;
+}
+
+export function setupRoutes(app: Express, wss: WebSocketServer) {
+    // Serve APK for easy Wi-Fi installation
+    app.use('/download-apk', express.static(path.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
 
     // REST: Check Language Server status (is Antigravity running?)
     app.get('/api/ls-status', (req: Request, res: Response) => {
@@ -771,6 +786,13 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 const msg = JSON.parse(message.toString());
                 console.log('[WebSocket] Received:', msg);
 
+                // Ensure state stream is running for any received conversationId/id
+                if (msg.conversationId) {
+                    getOrCreateAgentStateStream(msg.conversationId, wss);
+                } else if (msg.id) {
+                    getOrCreateAgentStateStream(msg.id, wss);
+                }
+
                 if (msg.type === 'START_AGENT') {
                     const projectPath = msg.projectPath;
                     if (currentPtyProcess) {
@@ -939,7 +961,8 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset, hasMore: false, isPagination: offset > 0 }));
                             }
                         } else {
-                            ws.send(JSON.stringify({ type: 'ERROR', error: 'Transcript not found' }));
+                            // Transcript file doesn't exist yet (e.g. new chat just created)
+                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset: 0, hasMore: false, isPagination: false }));
                         }
                     } catch (err) {
                         console.error('[WebSocket] Error in GET_TRANSCRIPT:', err);
@@ -951,11 +974,15 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     if (!cascadeStreams.has(conversationId)) {
                         const stream = new CascadeReactiveStream(conversationId);
                         stream.on('update', (data) => {
-                            ws.send(JSON.stringify({ type: 'CASCADE_UPDATE', data }));
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'CASCADE_UPDATE', data }));
+                            }
                         });
                         stream.connect();
                         cascadeStreams.set(conversationId, stream);
                     }
+                    if (!(ws as any).myCascadeStreams) (ws as any).myCascadeStreams = new Set<string>();
+                    (ws as any).myCascadeStreams.add(conversationId);
 
                     if (!msg.offset) {
                         try {
@@ -1011,6 +1038,15 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             }
             if ((ws as any).transcriptWatcher) {
                 (ws as any).transcriptWatcher.close();
+            }
+            if ((ws as any).myCascadeStreams) {
+                for (const convId of (ws as any).myCascadeStreams) {
+                    const stream = cascadeStreams.get(convId);
+                    if (stream) {
+                        stream.disconnect();
+                        cascadeStreams.delete(convId);
+                    }
+                }
             }
         });
     });

@@ -55,19 +55,33 @@ async function sendViaAgentAPI(conversationId: string, content: string): Promise
     }
 
     if (conversationId.startsWith('START_NEW_AGENT_')) {
-        const workspaceUri = conversationId.replace('START_NEW_AGENT_', '');
         const newConvId = crypto.randomUUID();
+
+        const lsPath = discovery.agentApiPath;
+        console.log(`[Sender] Creating new conversation via AgentAPI: ${lsPath} agentapi new-conversation`);
         
-        sendViaFile(newConvId, content);
-
-        const lsPath = discovery.agentApiPath.replace('agentapi.exe', 'language_server.exe');
-        const child = spawn(lsPath, ['run', '--root', workspaceUri.replace('file:///', ''), '--conversation-id', newConvId, '--no-browser'], {
-            detached: true,
-            stdio: 'ignore'
+        return new Promise((resolve) => {
+            execFile(lsPath, ['agentapi', 'new-conversation', content], {
+                timeout: 30000,
+                windowsHide: true,
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    console.error('[Sender] new-conversation failed:', err.message, stderr);
+                    // Fallback: write message to file
+                    sendViaFile(newConvId, content);
+                    resolve({ success: false, method: 'direct_spawn', error: err.message });
+                    return;
+                }
+                console.log('[Sender] new-conversation result:', stdout.trim());
+                try {
+                    const result = JSON.parse(stdout);
+                    const createdConvId = result?.response?.newConversation?.conversationId || newConvId;
+                    resolve({ success: true, method: 'direct_spawn', newConvId: createdConvId });
+                } catch {
+                    resolve({ success: true, method: 'direct_spawn', newConvId });
+                }
+            });
         });
-        child.unref();
-
-        return { success: true, method: 'direct_spawn', newConvId };
     }
 
     return new Promise((resolve) => {

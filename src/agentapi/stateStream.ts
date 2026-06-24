@@ -2,9 +2,15 @@ import https from 'https';
 import { EventEmitter } from 'events';
 import { discoverLanguageServer } from './discovery';
 
-class AgentStateStream extends EventEmitter {
+export class AgentStateStream extends EventEmitter {
+    private conversationId: string;
     private req: any = null;
     private reconnectTimer: NodeJS.Timeout | null = null;
+
+    constructor(conversationId: string) {
+        super();
+        this.conversationId = conversationId;
+    }
 
     connect() {
         if (this.req) return;
@@ -15,7 +21,18 @@ class AgentStateStream extends EventEmitter {
             return;
         }
 
-        console.log('[StateStream] Connecting to StreamAgentStateUpdates...');
+        console.log(`[StateStream] Connecting to StreamAgentStateUpdates for ${this.conversationId}...`);
+        
+        const payloadObj = { conversationId: this.conversationId };
+        const payloadStr = JSON.stringify(payloadObj);
+        const payloadBuf = Buffer.from(payloadStr, 'utf8');
+
+        // Connect-RPC Envelope: [Flag(1)][Length(4)][Message...]
+        const envelope = Buffer.alloc(5 + payloadBuf.length);
+        envelope[0] = 0; // flag
+        envelope.writeUInt32BE(payloadBuf.length, 1);
+        payloadBuf.copy(envelope, 5);
+
         this.req = https.request({
             hostname: 'localhost',
             port: ls.httpsPort,
@@ -29,19 +46,18 @@ class AgentStateStream extends EventEmitter {
             rejectUnauthorized: false
         }, (res) => {
             if (res.statusCode !== 200) {
-                console.error(`[StateStream] Connection failed with status ${res.statusCode}`);
+                console.error(`[StateStream] Connection failed with status ${res.statusCode} for ${this.conversationId}`);
                 this.req = null;
                 this.scheduleReconnect();
                 return;
             }
 
-            console.log('[StateStream] Connected successfully.');
+            console.log(`[StateStream] Connected successfully for ${this.conversationId}.`);
             let buffer = Buffer.alloc(0);
 
             res.on('data', (chunk: Buffer) => {
                 buffer = Buffer.concat([buffer, chunk]);
                 
-                // Parse Connect-RPC Envelope: [Flag(1)][Length(4)][Message...]
                 while (buffer.length >= 5) {
                     const flags = buffer[0];
                     const length = buffer.readUInt32BE(1);
@@ -53,7 +69,36 @@ class AgentStateStream extends EventEmitter {
                         try {
                             const messageStr = messageBuffer.toString('utf8');
                             const messageObj = JSON.parse(messageStr);
-                            this.emit('state', messageObj);
+                            
+                            // Map/Flatten the update object to match expected client format
+                            let mappedData: any = {};
+                            if (messageObj.update) {
+                                const update = messageObj.update;
+                                mappedData = { ...update };
+                                
+                                // Map status to state (expected by Android client: "THINKING" or "IDLE")
+                                const status = update.status || 'CASCADE_RUN_STATUS_IDLE';
+                                if (status === 'CASCADE_RUN_STATUS_RUNNING') {
+                                    mappedData.state = 'THINKING';
+                                } else {
+                                    mappedData.state = 'IDLE';
+                                }
+                            } else if (messageObj.error) {
+                                mappedData = {
+                                    error: messageObj.error,
+                                    state: 'IDLE'
+                                };
+                            } else {
+                                mappedData = {
+                                    ...messageObj,
+                                    state: 'IDLE'
+                                };
+                            }
+                            
+                            // Ensure conversationId is always present
+                            mappedData.conversationId = this.conversationId;
+                            
+                            this.emit('state', mappedData);
                         } catch (err) {
                             console.error('[StateStream] Error parsing message:', err);
                         }
@@ -64,27 +109,32 @@ class AgentStateStream extends EventEmitter {
             });
 
             res.on('end', () => {
-                console.log('[StateStream] Stream ended.');
+                console.log(`[StateStream] Stream ended for ${this.conversationId}.`);
                 this.req = null;
                 this.scheduleReconnect();
             });
             
             res.on('error', (err: Error) => {
-                console.error('[StateStream] Stream error:', err);
+                console.error(`[StateStream] Stream error for ${this.conversationId}:`, err);
                 this.req = null;
                 this.scheduleReconnect();
             });
         });
 
         this.req.on('error', (err: Error) => {
-            console.error('[StateStream] Request error:', err);
+            console.error(`[StateStream] Request error for ${this.conversationId}:`, err);
             this.req = null;
             this.scheduleReconnect();
         });
 
-        // Send empty payload
-        this.req.write(Buffer.from([0, 0, 0, 0, 2, 123, 125])); // Envelope for "{}"
+        this.req.write(envelope);
         this.req.end();
+    }
+
+    disconnect() {
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        this.req?.destroy();
+        this.req = null;
     }
 
     private scheduleReconnect() {
@@ -95,4 +145,3 @@ class AgentStateStream extends EventEmitter {
     }
 }
 
-export const agentStateStream = new AgentStateStream();

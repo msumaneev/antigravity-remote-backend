@@ -3,8 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getOrCreateAgentStateStream = getOrCreateAgentStateStream;
 exports.setupRoutes = setupRoutes;
 const express_1 = __importDefault(require("express"));
+const ws_1 = require("ws");
 const parser_1 = require("../history/parser");
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const manager_1 = require("../pty/manager");
@@ -205,7 +207,7 @@ async function getProjectsTree() {
                         subtitle,
                         subagents: [],
                         updatedAt,
-                        stepCount: Math.floor(Math.random() * 50)
+                        stepCount: 0
                     });
                 }
                 db.close();
@@ -270,7 +272,13 @@ function transformTrajectoriesToProjectTree(summaries) {
     for (const [convId, traj] of Object.entries(summaries)) {
         if (archivedChats.has(convId))
             continue;
-        const projectName = decodeURIComponent(traj.workspaceName || 'Unknown');
+        let rawProjectName = traj.workspaceName;
+        if (!rawProjectName && traj.workspaceUri) {
+            const decoded = decodeURIComponent(traj.workspaceUri);
+            const parts = decoded.replace(/\/$/, '').split('/');
+            rawProjectName = parts[parts.length - 1] || 'Unknown';
+        }
+        const projectName = decodeURIComponent(rawProjectName || 'Unknown');
         if (!projects.has(projectName)) {
             projects.set(projectName, {
                 id: projectName,
@@ -307,12 +315,15 @@ const multer_1 = __importDefault(require("multer"));
 // We'll use memory storage and write it manually to the right place so we can use conversationId.
 const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
 const cascadeStreams = new Map();
-function setupRoutes(app, wss) {
-    // Serve APK for easy Wi-Fi installation
-    app.use('/download-apk', express_1.default.static(path_1.default.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
-    // Start listening to agent state updates
-    stateStream_1.agentStateStream.connect();
-    stateStream_1.agentStateStream.on('state', (stateObj) => {
+const agentStateStreams = new Map();
+function getOrCreateAgentStateStream(conversationId, wss) {
+    if (!conversationId)
+        return null;
+    if (agentStateStreams.has(conversationId)) {
+        return agentStateStreams.get(conversationId);
+    }
+    const stream = new stateStream_1.AgentStateStream(conversationId);
+    stream.on('state', (stateObj) => {
         const payload = JSON.stringify({ type: 'AGENT_STATE', data: stateObj });
         wss.clients.forEach(client => {
             if (client.readyState === 1) { // 1 = OPEN
@@ -320,6 +331,13 @@ function setupRoutes(app, wss) {
             }
         });
     });
+    stream.connect();
+    agentStateStreams.set(conversationId, stream);
+    return stream;
+}
+function setupRoutes(app, wss) {
+    // Serve APK for easy Wi-Fi installation
+    app.use('/download-apk', express_1.default.static(path_1.default.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
     // REST: Check Language Server status (is Antigravity running?)
     app.get('/api/ls-status', (req, res) => {
         const discovery = (0, discovery_1.discoverLanguageServer)(true);
@@ -739,6 +757,13 @@ function setupRoutes(app, wss) {
             try {
                 const msg = JSON.parse(message.toString());
                 console.log('[WebSocket] Received:', msg);
+                // Ensure state stream is running for any received conversationId/id
+                if (msg.conversationId) {
+                    getOrCreateAgentStateStream(msg.conversationId, wss);
+                }
+                else if (msg.id) {
+                    getOrCreateAgentStateStream(msg.id, wss);
+                }
                 if (msg.type === 'START_AGENT') {
                     const projectPath = msg.projectPath;
                     if (currentPtyProcess) {
@@ -930,7 +955,8 @@ function setupRoutes(app, wss) {
                             }
                         }
                         else {
-                            ws.send(JSON.stringify({ type: 'ERROR', error: 'Transcript not found' }));
+                            // Transcript file doesn't exist yet (e.g. new chat just created)
+                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset: 0, hasMore: false, isPagination: false }));
                         }
                     }
                     catch (err) {
@@ -942,11 +968,16 @@ function setupRoutes(app, wss) {
                     if (!cascadeStreams.has(conversationId)) {
                         const stream = new cascadeStream_1.CascadeReactiveStream(conversationId);
                         stream.on('update', (data) => {
-                            ws.send(JSON.stringify({ type: 'CASCADE_UPDATE', data }));
+                            if (ws.readyState === ws_1.WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'CASCADE_UPDATE', data }));
+                            }
                         });
                         stream.connect();
                         cascadeStreams.set(conversationId, stream);
                     }
+                    if (!ws.myCascadeStreams)
+                        ws.myCascadeStreams = new Set();
+                    ws.myCascadeStreams.add(conversationId);
                     if (!msg.offset) {
                         try {
                             const id = msg.id;
@@ -1003,6 +1034,15 @@ function setupRoutes(app, wss) {
             }
             if (ws.transcriptWatcher) {
                 ws.transcriptWatcher.close();
+            }
+            if (ws.myCascadeStreams) {
+                for (const convId of ws.myCascadeStreams) {
+                    const stream = cascadeStreams.get(convId);
+                    if (stream) {
+                        stream.disconnect();
+                        cascadeStreams.delete(convId);
+                    }
+                }
             }
         });
     });
