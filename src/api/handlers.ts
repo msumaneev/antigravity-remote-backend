@@ -392,7 +392,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
         // Spawn update script detached and exit
         const { spawn } = require('child_process');
-        const child = spawn(isWindows ? scriptPath : 'bash', isWindows ? [] : [scriptPath], {
+        const child = spawn(isWindows ? 'cmd.exe' : 'bash', isWindows ? ['/c', scriptPath] : [scriptPath], {
             detached: true,
             stdio: 'ignore',
             cwd: path.join(__dirname, '..', '..')
