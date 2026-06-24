@@ -332,6 +332,7 @@ const agentStateStreams = new Map<string, AgentStateStream>();
 
 export function getOrCreateAgentStateStream(conversationId: string, wss: WebSocketServer) {
     if (!conversationId) return null;
+    if (conversationId.startsWith('START_NEW_AGENT_')) return null;
     if (agentStateStreams.has(conversationId)) {
         return agentStateStreams.get(conversationId)!;
     }
@@ -779,8 +780,39 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
             const normalizedPath = path.normalize(filePath);
             
-            // Security check: must be inside BRAIN_DIR
-            if (!normalizedPath.startsWith(BRAIN_DIR)) {
+            // Security check: must be inside BRAIN_DIR or one of the project workspaces
+            const isAllowed = (() => {
+                const normalizedLower = normalizedPath.toLowerCase();
+                const brainDirLower = path.normalize(BRAIN_DIR).toLowerCase();
+                if (normalizedLower.startsWith(brainDirLower)) {
+                    return true;
+                }
+                
+                const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
+                if (fs.existsSync(projectsConfigDir)) {
+                    try {
+                        const files = fs.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
+                        for (const file of files) {
+                            try {
+                                const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
+                                const data = JSON.parse(content);
+                                if (data.projectResources?.resources?.[0]?.folderUri) {
+                                    const uri = data.projectResources.resources[0].folderUri;
+                                    let pPath = uri.replace('file:///', '');
+                                    pPath = decodeURIComponent(pPath);
+                                    const projDirLower = path.normalize(pPath).toLowerCase();
+                                    if (normalizedLower.startsWith(projDirLower)) {
+                                        return true;
+                                    }
+                                }
+                            } catch (e) {}
+                        }
+                    } catch (e) {}
+                }
+                return false;
+            })();
+
+            if (!isAllowed) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
@@ -1032,11 +1064,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 try {
                                     const newSize = fs.statSync(logFile).size;
                                     if (newSize > currentSize) {
+                                        const readStart = currentSize;
+                                        const readLength = newSize - readStart;
+                                        currentSize = newSize; // Update immediately to prevent duplicate reads on rapid OS triggers
+                                        
                                         const fd = fs.openSync(logFile, 'r');
-                                        const buffer = Buffer.alloc(newSize - currentSize);
-                                        fs.readSync(fd, buffer, 0, newSize - currentSize, currentSize);
+                                        const buffer = Buffer.alloc(readLength);
+                                        fs.readSync(fd, buffer, 0, readLength, readStart);
                                         fs.closeSync(fd);
-                                        currentSize = newSize;
                                         
                                         const newContent = buffer.toString('utf-8');
                                         const lines = newContent.split('\n');

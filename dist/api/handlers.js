@@ -319,6 +319,8 @@ const agentStateStreams = new Map();
 function getOrCreateAgentStateStream(conversationId, wss) {
     if (!conversationId)
         return null;
+    if (conversationId.startsWith('START_NEW_AGENT_'))
+        return null;
     if (agentStateStreams.has(conversationId)) {
         return agentStateStreams.get(conversationId);
     }
@@ -748,8 +750,39 @@ function setupRoutes(app, wss) {
                 return res.status(400).json({ error: 'path is required' });
             }
             const normalizedPath = path_1.default.normalize(filePath);
-            // Security check: must be inside BRAIN_DIR
-            if (!normalizedPath.startsWith(BRAIN_DIR)) {
+            // Security check: must be inside BRAIN_DIR or one of the project workspaces
+            const isAllowed = (() => {
+                const normalizedLower = normalizedPath.toLowerCase();
+                const brainDirLower = path_1.default.normalize(BRAIN_DIR).toLowerCase();
+                if (normalizedLower.startsWith(brainDirLower)) {
+                    return true;
+                }
+                const projectsConfigDir = path_1.default.join(GEMINI_DIR, 'config', 'projects');
+                if (fs_1.default.existsSync(projectsConfigDir)) {
+                    try {
+                        const files = fs_1.default.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
+                        for (const file of files) {
+                            try {
+                                const content = fs_1.default.readFileSync(path_1.default.join(projectsConfigDir, file), 'utf-8');
+                                const data = JSON.parse(content);
+                                if (data.projectResources?.resources?.[0]?.folderUri) {
+                                    const uri = data.projectResources.resources[0].folderUri;
+                                    let pPath = uri.replace('file:///', '');
+                                    pPath = decodeURIComponent(pPath);
+                                    const projDirLower = path_1.default.normalize(pPath).toLowerCase();
+                                    if (normalizedLower.startsWith(projDirLower)) {
+                                        return true;
+                                    }
+                                }
+                            }
+                            catch (e) { }
+                        }
+                    }
+                    catch (e) { }
+                }
+                return false;
+            })();
+            if (!isAllowed) {
                 return res.status(403).json({ error: 'Access denied' });
             }
             if (!fs_1.default.existsSync(normalizedPath)) {
@@ -1019,11 +1052,13 @@ function setupRoutes(app, wss) {
                                     try {
                                         const newSize = fs_1.default.statSync(logFile).size;
                                         if (newSize > currentSize) {
+                                            const readStart = currentSize;
+                                            const readLength = newSize - readStart;
+                                            currentSize = newSize; // Update immediately to prevent duplicate reads on rapid OS triggers
                                             const fd = fs_1.default.openSync(logFile, 'r');
-                                            const buffer = Buffer.alloc(newSize - currentSize);
-                                            fs_1.default.readSync(fd, buffer, 0, newSize - currentSize, currentSize);
+                                            const buffer = Buffer.alloc(readLength);
+                                            fs_1.default.readSync(fd, buffer, 0, readLength, readStart);
                                             fs_1.default.closeSync(fd);
-                                            currentSize = newSize;
                                             const newContent = buffer.toString('utf-8');
                                             const lines = newContent.split('\n');
                                             const newMessages = [];
