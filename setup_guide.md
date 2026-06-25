@@ -1,15 +1,15 @@
-# Antigravity Remote Backend — Руководство по развёртыванию и подключению Android-приложения
+# Antigravity Remote Backend — Deployment and Android App Connection Guide
 
-## Содержание
-- [Быстрый старт](#быстрый-старт)
-- [Подключение Android-приложения](#подключение-android-приложения)
-- [Настройка брандмауэра Windows](#настройка-брандмауэра-windows)
-- [Управление процессом сервера](#управление-процессом-сервера)
-- [Типичные ошибки и решения](#типичные-ошибки-и-решения)
+## Table of Contents
+- [Quick Start](#quick-start)
+- [Connecting the Android App](#connecting-the-android-app)
+- [Windows Firewall Setup](#windows-firewall-setup)
+- [Server Process Management](#server-process-management)
+- [Common Errors and Solutions](#common-errors-and-solutions)
 
 ---
 
-## Быстрый старт
+## Quick Start
 
 ```bash
 cd /path/to/antigravity-remote-backend
@@ -18,7 +18,7 @@ npm run build
 node dist/index.js
 ```
 
-При запуске сервер выведет в консоль:
+Upon startup, the server will output to the console:
 ```
 =================================================
 🚀 Antigravity Remote Backend is RUNNING
@@ -26,7 +26,7 @@ node dist/index.js
 
 📱 Enter these settings in your Android App:
 
-   IP Address : <ваш IP>
+   IP Address : <your IP>
    Port       : 8081
 
 =================================================
@@ -37,88 +37,88 @@ node dist/index.js
 ```
 
 > [!IMPORTANT]
-> **Код сопряжения ротируется каждые 5 минут.** Если код не подошёл — посмотрите актуальный в логах сервера.
+> **The pairing code rotates every 5 minutes.** If the code is rejected, check the server logs for the current one.
 
 ---
 
-## Подключение Android-приложения
+## Connecting the Android App
 
-### Шаг 1: Узнайте IP-адрес сервера
+### Step 1: Find the Server IP Address
 
-Сервер автоматически определяет IP. Если используется **Tailscale**, будет показан Tailscale IP (формат `100.x.x.x`). Иначе — локальный IP.
+The server automatically detects the IP. If you are using **Tailscale**, it will display the Tailscale IP (format `100.x.x.x`). Otherwise, it will show the local network IP.
 
-### Шаг 2: Введите настройки в приложение
+### Step 2: Enter Settings in the App
 
-В Android-приложении на экране подключения введите:
-- **IP Address** — IP из консоли сервера
-- **Port** — `8081` (по умолчанию)
+In the Android app, on the connection screen, enter:
+- **IP Address** — The IP shown in the server console
+- **Port** — `8081` (default)
 
-### Шаг 3: Введите 6-значный код
+### Step 3: Enter the 6-digit Code
 
-Введите код, показанный в консоли, и нажмите **Connect**.
+Enter the code displayed in the console and tap **Connect**.
 
 ---
 
-## Настройка брандмауэра Windows
+## Windows Firewall Setup
 
 > [!CAUTION]
-> **Это обязательный шаг!** Без него Android-приложение не сможет подключиться — вы будете получать ошибку `Connection failed: failed to connect after 5000ms`.
+> **This is a mandatory step!** Without it, the Android app will not be able to connect — you will get a `Connection failed: failed to connect after 5000ms` error.
 
-### Откройте PowerShell от имени администратора и выполните:
+### Open PowerShell as Administrator and run:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Antigravity Backend 8081" -Direction Inbound -LocalPort 8081 -Protocol TCP -Action Allow
 ```
 
-### Проверка правила:
+### Verify the rule:
 
 ```powershell
 Get-NetFirewallRule -DisplayName "Antigravity Backend 8081"
 ```
 
 > [!NOTE]
-> Правило создаётся **один раз** и сохраняется после перезагрузки. Повторно выполнять не нужно.
+> This rule only needs to be created **once** and persists after reboot. There is no need to run it again.
 
-### Если используете Tailscale
+### If using Tailscale
 
-Убедитесь, что:
-1. Tailscale установлен и подключён на **обоих** устройствах (сервер + телефон)
-2. Оба устройства видят друг друга в Tailscale Admin Console
-3. ACL-правила Tailscale разрешают трафик между устройствами
+Ensure that:
+1. Tailscale is installed and connected on **both** devices (server + phone).
+2. Both devices can see each other in the Tailscale Admin Console.
+3. Tailscale ACL rules allow traffic between the devices.
 
 ---
 
-## Управление процессом сервера
+## Server Process Management
 
-### Рекомендуемый способ: прямой запуск
+### Recommended Method: Direct Run
 
 ```bash
 node dist/index.js
 ```
 
-### С PM2 (для автоматического перезапуска)
+### With PM2 (for automatic restarts)
 
 ```bash
-# Первый запуск
+# First launch
 npx pm2 start dist/index.js --name "antigravity-backend"
 
-# Просмотр логов (включая код сопряжения)
+# View logs (including pairing code)
 npx pm2 logs antigravity-backend --nostream --lines 50
 
-# Перезапуск после изменений
+# Restart after changes
 npm run build
 npx pm2 restart antigravity-backend
 
-# Остановка
+# Stop
 npx pm2 stop antigravity-backend
 ```
 
 > [!WARNING]
-> **PM2 на Windows может быть нестабилен.** PM2-демон может "умирать" между вызовами команд. Если `npx pm2 status` показывает пустую таблицу — демон перезапустился и потерял процесс. В таком случае используйте прямой запуск.
+> **PM2 on Windows can be unstable.** The PM2 daemon might "die" between command calls. If `npx pm2 status` shows an empty table, the daemon restarted and lost the process. In this case, use the direct run method instead.
 
-### Просмотр PM2-логов напрямую
+### Viewing PM2 Logs Directly
 
-Если `npx pm2 logs` не показывает данные, логи хранятся в:
+If `npx pm2 logs` does not display data, the logs are stored in:
 ```
 %USERPROFILE%\.pm2\logs\antigravity-backend-out.log   # stdout
 %USERPROFILE%\.pm2\logs\antigravity-backend-error.log  # stderr
@@ -126,42 +126,42 @@ npx pm2 stop antigravity-backend
 
 ---
 
-## Типичные ошибки и решения
+## Common Errors and Solutions
 
 ### ❌ `Connection failed: failed to connect after 5000ms`
 
-**Причина:** Телефон не может дотянуться до сервера.
+**Cause:** The phone cannot reach the server.
 
-**Решения (проверяйте по порядку):**
+**Solutions (check in order):**
 
-1. **Брандмауэр Windows** — самая частая причина. [Добавьте правило](#настройка-брандмауэра-windows).
+1. **Windows Firewall** — The most common cause. [Add the firewall rule](#windows-firewall-setup).
 
-2. **Сервер не запущен** — проверьте:
+2. **Server is not running** — Check with:
    ```powershell
    netstat -ano | Select-String ":8081"
    ```
-   Если нет строки с `LISTENING` — сервер не слушает порт.
+   If there is no row with `LISTENING`, the server is not listening on the port.
 
-3. **Порт занят другим процессом** — см. [EADDRINUSE](#-error-listen-eaddrinuse-address-already-in-use-00008081).
+3. **Port is used by another process** — See [EADDRINUSE](#-error-listen-eaddrinuse-address-already-in-use-00008081).
 
-4. **Разные сети** — если используете Tailscale, убедитесь, что оба устройства подключены. Если локальная сеть — телефон и сервер должны быть в одной Wi-Fi.
+4. **Different networks** — If using Tailscale, ensure both devices are connected. If using a local network, the phone and server must be on the same Wi-Fi.
 
 ---
 
 ### ❌ `401 Unauthorized` / `Invalid or expired pairing code`
 
-**Причина:** Код сопряжения не совпадает.
+**Cause:** The pairing code does not match.
 
-**Решения:**
+**Solutions:**
 
-1. **Код протух** — ротация каждые 5 минут. Посмотрите актуальный код в логах:
+1. **Code expired** — It rotates every 5 minutes. Find the current code in the logs:
    ```powershell
-   # Прямой запуск — код в консоли
-   # PM2 — в логах:
+   # Direct run — code is in the console
+   # PM2 — code is in the logs:
    Select-String "PAIRING CODE" "$env:USERPROFILE\.pm2\logs\antigravity-backend-out.log" | Select-Object -Last 1
    ```
 
-2. **Запущена старая версия кода** — если эндпоинт `/api/pair` отсутствует, сервер вернёт 404. Пересоберите:
+2. **Old code version is running** — If the `/api/pair` endpoint is missing, the server returns 404. Rebuild:
    ```bash
    npm run build
    ```
@@ -170,84 +170,84 @@ npx pm2 stop antigravity-backend
 
 ### ❌ `404 Not Found`
 
-**Причина:** Маршрут `/api/pair` не зарегистрирован в сервере.
+**Cause:** The `/api/pair` route is not registered on the server.
 
-**Решение:**
+**Solution:**
 ```bash
 git pull origin master
 npm install
 npm run build
-# Перезапустите сервер
+# Restart the server
 ```
 
 ---
 
 ### ❌ `Error: listen EADDRINUSE: address already in use 0.0.0.0:8081`
 
-**Причина:** Порт 8081 уже занят другим процессом.
+**Cause:** Port 8081 is already occupied by another process.
 
-**Решение:**
+**Solution:**
 
-1. Найдите процесс, занимающий порт:
+1. Find the process occupying the port:
    ```powershell
    netstat -ano | Select-String ":8081"
-   # Запишите PID из последней колонки (например, 16672)
+   # Note the PID from the last column (e.g., 16672)
    ```
 
-2. Проверьте, что это за процесс:
+2. Check what process it is:
    ```powershell
    Get-CimInstance Win32_Process -Filter "ProcessId = 16672" | Select-Object ProcessId, CommandLine
    ```
 
-3. Убейте его:
+3. Kill it:
    ```powershell
    Stop-Process -Id 16672 -Force
    ```
 
-4. **Проверьте наличие watchdog-скриптов!** Иногда на сервере запущен PowerShell-сторож, который автоматически перезапускает старую версию:
+4. **Check for watchdog scripts!** Sometimes a PowerShell watchdog is running on the server, automatically restarting the old version:
    ```powershell
-   # Найти watchdog-процессы
+   # Find watchdog processes
    Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "while.*node" } | Select-Object ProcessId, CommandLine
    ```
-   Убейте их тоже, иначе старый процесс будет воскресать.
+   Kill them too, otherwise the old process will resurrect.
 
 > [!WARNING]
-> **Watchdog + PM2 = конфликт!** Если на сервере настроен watchdog-скрипт (`while ($true) { node dist/index.js; ... }`), и вы одновременно используете PM2 — они будут конкурировать за порт 8081. Используйте **что-то одно**.
+> **Watchdog + PM2 = conflict!** If a watchdog script is configured on the server (`while ($true) { node dist/index.js; ... }`), and you are using PM2 at the same time, they will compete for port 8081. Use **only one** of them.
 
 ---
 
-### ❌ WebSocket подключается, но данные не загружаются
+### ❌ WebSocket connects, but data doesn't load
 
-Проверьте логи сервера на наличие ошибок:
+Check the server logs for errors:
 ```powershell
 # PM2
 Get-Content "$env:USERPROFILE\.pm2\logs\antigravity-backend-error.log" -Tail 50
 
-# Или прямой запуск — ошибки выводятся в консоль
+# Or direct run — errors are output to the console
 ```
 
 ---
 
-## Переменные окружения (.env)
+## Environment Variables (.env)
 
-Файл `.env` в корне проекта. Основные переменные:
+The `.env` file is located in the project root. Key variables:
 
-| Переменная | Описание | По умолчанию |
+| Variable | Description | Default |
 |---|---|---|
-| `PORT` | Порт HTTP-сервера | `8081` |
-| `HOST` | Адрес привязки | `0.0.0.0` |
-| `JWT_SECRET` | Секрет для подписи JWT-токенов | Авто-генерация |
-| `ADMIN_LOGIN` | Логин админа | — |
-| `ADMIN_PASSWORD` | Пароль админа | — |
+| `PORT` | HTTP server port | `8081` |
+| `HOST` | Bind address | `0.0.0.0` |
+| `JWT_SECRET` | Secret for signing JWT tokens | Auto-generated |
+| `ADMIN_LOGIN` | Admin login | — |
+| `ADMIN_PASSWORD` | Admin password | — |
 
 ---
 
-## Чеклист перед первым запуском
+## Pre-launch Checklist
 
-- [ ] `npm install` выполнен
-- [ ] `npm run build` выполнен без ошибок
-- [ ] Правило брандмауэра для порта 8081 создано
-- [ ] Файл `.env` настроен (или используются значения по умолчанию)
-- [ ] Нет других процессов на порту 8081 (`netstat -ano | Select-String ":8081"`)
-- [ ] Нет конфликтующих watchdog-скриптов
-- [ ] Tailscale подключён на обоих устройствах (если используется)
+- [ ] `npm install` executed
+- [ ] `npm run build` executed without errors
+- [ ] Firewall rule for port 8081 created
+- [ ] `.env` file configured (or using defaults)
+- [ ] No other processes on port 8081 (`netstat -ano | Select-String ":8081"`)
+- [ ] No conflicting watchdog scripts
+- [ ] Tailscale connected on both devices (if used)
