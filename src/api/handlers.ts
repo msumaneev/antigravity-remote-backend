@@ -13,6 +13,7 @@ import os from 'os';
 import https from 'https';
 import { callRPC } from '../agentapi/rpc';
 import { CascadeReactiveStream } from '../agentapi/cascadeStream';
+import { listDevices, removeDevice } from '../auth/auth';
 
 const GEMINI_DIR = path.join(os.homedir(), '.gemini');
 const BRAIN_DIR = path.join(GEMINI_DIR, 'antigravity', 'brain');
@@ -474,6 +475,24 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             });
         } catch (err) {
             res.status(503).json({ error: 'Failed to get account info' });
+        }
+    });
+
+    app.get('/api/devices', (req: Request, res: Response) => {
+        try {
+            const devices = listDevices();
+            res.json(devices);
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.delete('/api/devices/:id', (req: Request, res: Response) => {
+        try {
+            const success = removeDevice(req.params.id as string);
+            res.json({ success });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
         }
     });
 
@@ -971,9 +990,21 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 } else if (msg.type === 'GET_MODELS') {
                     try {
                         const data = await callRPC('GetCascadeModelConfigData');
+                        console.log('--- MODELS_LIST ---');
+                        console.log(JSON.stringify(data.clientModelConfigs, null, 2));
                         ws.send(JSON.stringify({ type: 'MODELS_LIST', data: data.clientModelConfigs || [] }));
                     } catch (err) {
                         ws.send(JSON.stringify({ type: 'ERROR', error: 'Failed to get models' }));
+                    }
+                } else if (msg.type === 'GET_QUOTA_SUMMARY') {
+                    try {
+                        const data = await callRPC('RetrieveUserQuotaSummary');
+                        ws.send(JSON.stringify({ 
+                            type: 'QUOTA_SUMMARY', 
+                            data: data.response
+                        }));
+                    } catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: 'Failed to get quota summary' }));
                     }
                 } else if (msg.type === 'STOP_AGENT') {
                     try {
