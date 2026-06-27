@@ -10,7 +10,7 @@ export interface RPCError {
 
 export async function callRPC<T = any>(method: string, body: object = {}, options: { timeoutMs?: number } = {}): Promise<T> {
   const ls = discoverLanguageServer();
-  if (!ls) throw new Error('Language Server not found');
+  if (!ls) return Promise.reject(new Error('Language Server not found'));
 
   const url = `https://127.0.0.1:${ls.httpsPort}/exa.language_server_pb.LanguageServerService/${method}`;
   const data = JSON.stringify(body);

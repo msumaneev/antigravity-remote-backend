@@ -19,6 +19,7 @@ const os_1 = __importDefault(require("os"));
 const https_1 = __importDefault(require("https"));
 const rpc_1 = require("../agentapi/rpc");
 const cascadeStream_1 = require("../agentapi/cascadeStream");
+const auth_1 = require("../auth/auth");
 const GEMINI_DIR = path_1.default.join(os_1.default.homedir(), '.gemini');
 const BRAIN_DIR = path_1.default.join(GEMINI_DIR, 'antigravity', 'brain');
 function extractTitle(dir, id) {
@@ -65,6 +66,35 @@ function extractTitle(dir, id) {
                         }
                     }
                     catch (e) { }
+                }
+            }
+        }
+    }
+    catch (e) { }
+    // Fallback: read pending messages (for chats created via RPC without transcript yet)
+    try {
+        const messagesDir = path_1.default.join(dir, '.system_generated', 'messages');
+        if (fs_1.default.existsSync(messagesDir)) {
+            const msgFiles = fs_1.default.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
+            for (const mf of msgFiles) {
+                const msgData = JSON.parse(fs_1.default.readFileSync(path_1.default.join(messagesDir, mf), 'utf-8'));
+                const content = msgData.content || '';
+                // Extract text from [Отправлено с телефона]: ... or <USER_REQUEST>
+                const phoneMatch = content.match(/\[Отправлено с телефона\]:\s*(.*?)(?:\\n|$)/s);
+                if (phoneMatch) {
+                    let title = phoneMatch[1].trim();
+                    if (title.length > 50)
+                        title = title.substring(0, 50) + '...';
+                    if (title)
+                        return title;
+                }
+                const reqMatch = content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
+                if (reqMatch) {
+                    let title = reqMatch[1].replace(/<[^>]+>/g, '').trim();
+                    if (title.length > 50)
+                        title = title.substring(0, 50) + '...';
+                    if (title)
+                        return title;
                 }
             }
         }
@@ -194,7 +224,10 @@ async function getProjectsTree() {
                     if (parentMatch)
                         tempStr = tempStr.replace(parentMatch[0], '');
                     const matches = [...tempStr.matchAll(/\$([a-f0-9\-]{36})/g)];
-                    const projectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
+                    let projectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
+                    // Extract workspace URI from blob for fallback project matching
+                    const wsMatch = str.match(/file:\/\/\/[^\x00-\x1f]*/);
+                    const workspaceUri = wsMatch ? wsMatch[0] : null;
                     const dirPath = path_1.default.join(BRAIN_DIR, id);
                     const title = summariesMap[id] || extractTitle(dirPath, id);
                     const subtitle = extractSubtitle(dirPath);
@@ -207,7 +240,8 @@ async function getProjectsTree() {
                         subtitle,
                         subagents: [],
                         updatedAt,
-                        stepCount: 0
+                        stepCount: 0,
+                        workspaceUri,
                     });
                 }
                 db.close();
@@ -227,6 +261,12 @@ async function getProjectsTree() {
             conversations: []
         };
     }
+    // Build reverse lookup: normalized project path -> projectId
+    const pathToProjectId = {};
+    for (const pId in projectMap) {
+        const normalizedPath = decodeURIComponent(projectMap[pId].path).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+        pathToProjectId[normalizedPath] = pId;
+    }
     const chatMap = {};
     for (const chat of allChats) {
         chatMap[chat.id] = chat;
@@ -241,7 +281,15 @@ async function getProjectsTree() {
         }
     }
     for (const chat of topLevelChats) {
-        const pId = chat.projectId;
+        let pId = chat.projectId;
+        // Fallback: if projectId not found in projectsDict, try matching by workspace URI
+        if ((!pId || !projectsDict[pId]) && chat.workspaceUri) {
+            const decodedUri = decodeURIComponent(chat.workspaceUri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+            const matchedPId = pathToProjectId[decodedUri];
+            if (matchedPId) {
+                pId = matchedPId;
+            }
+        }
         // If the chat doesn't belong to an active project, ignore it (it's archived or orphaned)
         if (!pId || !projectsDict[pId])
             continue;
@@ -456,6 +504,24 @@ function setupRoutes(app, wss) {
             res.status(503).json({ error: 'Failed to get account info' });
         }
     });
+    app.get('/api/devices', (req, res) => {
+        try {
+            const devices = (0, auth_1.listDevices)();
+            res.json(devices);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.delete('/api/devices/:id', (req, res) => {
+        try {
+            const success = (0, auth_1.removeDevice)(req.params.id);
+            res.json({ success });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
     app.get('/api/mcp', async (req, res) => {
         try {
             const data = await (0, rpc_1.callRPC)('GetMcpServerStates');
@@ -533,8 +599,14 @@ function setupRoutes(app, wss) {
         }
     });
     app.get('/api/files', async (req, res) => {
-        const uri = req.query.uri;
+        let uri = req.query.uri;
         try {
+            if (!uri || uri === "file:///") {
+                const projects = await getCachedProjectsTree();
+                if (projects && projects.length > 0 && projects[0].projectResources?.resources?.[0]?.folderUri) {
+                    uri = projects[0].projectResources.resources[0].folderUri;
+                }
+            }
             const data = await (0, rpc_1.callRPC)('ReadDir', { uri });
             res.json(data);
         }
@@ -648,7 +720,14 @@ function setupRoutes(app, wss) {
     // Search Endpoints
     app.get('/api/search/code', async (req, res) => {
         try {
-            const data = await (0, rpc_1.callRPC)('SearchCode', { query: req.query.query, workspaceUri: req.query.workspaceUri });
+            let wsUri = req.query.workspaceUri;
+            if (!wsUri) {
+                const projects = await getCachedProjectsTree();
+                if (projects && projects.length > 0 && projects[0].projectResources?.resources?.[0]?.folderUri) {
+                    wsUri = projects[0].projectResources.resources[0].folderUri;
+                }
+            }
+            const data = await (0, rpc_1.callRPC)('SearchCode', { query: req.query.query, workspaceUri: wsUri });
             res.json(data);
         }
         catch (err) {
@@ -755,6 +834,10 @@ function setupRoutes(app, wss) {
                 const normalizedLower = normalizedPath.toLowerCase();
                 const brainDirLower = path_1.default.normalize(BRAIN_DIR).toLowerCase();
                 if (normalizedLower.startsWith(brainDirLower)) {
+                    return true;
+                }
+                const configDirLower = path_1.default.normalize(path_1.default.join(GEMINI_DIR, 'config')).toLowerCase();
+                if (normalizedLower.startsWith(configDirLower)) {
                     return true;
                 }
                 const projectsConfigDir = path_1.default.join(GEMINI_DIR, 'config', 'projects');
@@ -951,10 +1034,39 @@ function setupRoutes(app, wss) {
                 else if (msg.type === 'GET_MODELS') {
                     try {
                         const data = await (0, rpc_1.callRPC)('GetCascadeModelConfigData');
+                        console.log('--- MODELS_LIST ---');
+                        console.log(JSON.stringify(data.clientModelConfigs, null, 2));
                         ws.send(JSON.stringify({ type: 'MODELS_LIST', data: data.clientModelConfigs || [] }));
                     }
                     catch (err) {
                         ws.send(JSON.stringify({ type: 'ERROR', error: 'Failed to get models' }));
+                    }
+                }
+                else if (msg.type === 'GET_QUOTA_SUMMARY') {
+                    try {
+                        const data = await (0, rpc_1.callRPC)('RetrieveUserQuotaSummary');
+                        ws.send(JSON.stringify({
+                            type: 'QUOTA_SUMMARY',
+                            data: data.response
+                        }));
+                    }
+                    catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: 'Failed to get quota summary' }));
+                    }
+                }
+                else if (msg.type === 'DELETE_CONVERSATION') {
+                    try {
+                        const { conversationId } = msg;
+                        if (!conversationId)
+                            throw new Error("Missing conversationId");
+                        const conversationPath = path_1.default.join(BRAIN_DIR, conversationId);
+                        if (fs_1.default.existsSync(conversationPath)) {
+                            fs_1.default.rmSync(conversationPath, { recursive: true, force: true });
+                        }
+                        ws.send(JSON.stringify({ type: 'EVENT', data: `Deleted conversation ${conversationId}` }));
+                    }
+                    catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: `Failed to delete: ${err.message}` }));
                     }
                 }
                 else if (msg.type === 'STOP_AGENT') {
@@ -1016,8 +1128,48 @@ function setupRoutes(app, wss) {
                             }
                         }
                         else {
-                            // Transcript file doesn't exist yet (e.g. new chat just created)
-                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset: 0, hasMore: false, isPagination: false }));
+                            // Transcript file doesn't exist yet — check messages/ for pending user messages
+                            const messagesDir = path_1.default.join(BRAIN_DIR, id, '.system_generated', 'messages');
+                            const pendingMsgs = [];
+                            if (fs_1.default.existsSync(messagesDir)) {
+                                const msgFiles = fs_1.default.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
+                                for (const mf of msgFiles) {
+                                    try {
+                                        const msgData = JSON.parse(fs_1.default.readFileSync(path_1.default.join(messagesDir, mf), 'utf-8'));
+                                        // Extract user text from USER_REQUEST tags
+                                        let userText = msgData.content || '';
+                                        const match = userText.match(/\[Отправлено с телефона\]:\s*(.*?)\\n/s);
+                                        if (match)
+                                            userText = match[1].trim();
+                                        else {
+                                            const reqMatch = userText.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
+                                            if (reqMatch)
+                                                userText = reqMatch[1].trim();
+                                        }
+                                        pendingMsgs.push({
+                                            step_index: 0,
+                                            source: 'USER_EXPLICIT',
+                                            type: 'USER_INPUT',
+                                            status: 'DONE',
+                                            created_at: msgData.timestamp || new Date().toISOString(),
+                                            content: userText,
+                                        });
+                                    }
+                                    catch (e) { }
+                                }
+                            }
+                            if (pendingMsgs.length > 0) {
+                                // Add a system message indicating the agent hasn't started yet
+                                pendingMsgs.push({
+                                    step_index: 1,
+                                    source: 'SYSTEM',
+                                    type: 'PLANNER_RESPONSE',
+                                    status: 'DONE',
+                                    created_at: new Date().toISOString(),
+                                    content: '⏳ Сообщение отправлено. Ожидание запуска агента...',
+                                });
+                            }
+                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: pendingMsgs, offset: 0, hasMore: false, isPagination: false }));
                         }
                     }
                     catch (err) {
@@ -1048,7 +1200,7 @@ function setupRoutes(app, wss) {
                                     ws.transcriptWatcher.close();
                                 }
                                 let currentSize = fs_1.default.statSync(logFile).size;
-                                ws.transcriptWatcher = fs_1.default.watch(logFile, (eventType, filename) => {
+                                const watcher = fs_1.default.watch(logFile, (eventType, filename) => {
                                     try {
                                         const newSize = fs_1.default.statSync(logFile).size;
                                         if (newSize > currentSize) {
@@ -1080,6 +1232,10 @@ function setupRoutes(app, wss) {
                                         // ignore read errors
                                     }
                                 });
+                                watcher.on('error', (err) => {
+                                    console.log('[WebSocket] Watcher error ignored on deletion');
+                                });
+                                ws.transcriptWatcher = watcher;
                             }
                         }
                         catch (err) { }

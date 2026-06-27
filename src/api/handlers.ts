@@ -64,6 +64,31 @@ function extractTitle(dir: string, id: string): string {
         }
     } catch (e) {}
 
+    // Fallback: read pending messages (for chats created via RPC without transcript yet)
+    try {
+        const messagesDir = path.join(dir, '.system_generated', 'messages');
+        if (fs.existsSync(messagesDir)) {
+            const msgFiles = fs.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
+            for (const mf of msgFiles) {
+                const msgData = JSON.parse(fs.readFileSync(path.join(messagesDir, mf), 'utf-8'));
+                const content = msgData.content || '';
+                // Extract text from [Отправлено с телефона]: ... or <USER_REQUEST>
+                const phoneMatch = content.match(/\[Отправлено с телефона\]:\s*(.*?)(?:\\n|$)/s);
+                if (phoneMatch) {
+                    let title = phoneMatch[1].trim();
+                    if (title.length > 50) title = title.substring(0, 50) + '...';
+                    if (title) return title;
+                }
+                const reqMatch = content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
+                if (reqMatch) {
+                    let title = reqMatch[1].replace(/<[^>]+>/g, '').trim();
+                    if (title.length > 50) title = title.substring(0, 50) + '...';
+                    if (title) return title;
+                }
+            }
+        }
+    } catch (e) {}
+
     return id;
 }
 
@@ -191,7 +216,11 @@ async function getProjectsTree() {
                     let tempStr = str;
                     if (parentMatch) tempStr = tempStr.replace(parentMatch[0], '');
                     const matches = [...tempStr.matchAll(/\$([a-f0-9\-]{36})/g)];
-                    const projectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
+                    let projectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
+                    
+                    // Extract workspace URI from blob for fallback project matching
+                    const wsMatch = str.match(/file:\/\/\/[^\x00-\x1f]*/);
+                    const workspaceUri = wsMatch ? wsMatch[0] : null;
                     
                     const dirPath = path.join(BRAIN_DIR, id);
                     const title = summariesMap[id] || extractTitle(dirPath, id);
@@ -206,7 +235,8 @@ async function getProjectsTree() {
                         subtitle,
                         subagents: [],
                         updatedAt,
-                        stepCount: 0
+                        stepCount: 0,
+                        workspaceUri,
                     });
                 }
                 db.close();
@@ -228,6 +258,13 @@ async function getProjectsTree() {
             conversations: []
         };
     }
+    
+    // Build reverse lookup: normalized project path -> projectId
+    const pathToProjectId: Record<string, string> = {};
+    for (const pId in projectMap) {
+        const normalizedPath = decodeURIComponent(projectMap[pId].path).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+        pathToProjectId[normalizedPath] = pId;
+    }
 
     const chatMap: Record<string, any> = {};
     
@@ -245,7 +282,17 @@ async function getProjectsTree() {
     }
     
     for (const chat of topLevelChats) {
-        const pId = chat.projectId;
+        let pId = chat.projectId;
+        
+        // Fallback: if projectId not found in projectsDict, try matching by workspace URI
+        if ((!pId || !projectsDict[pId]) && chat.workspaceUri) {
+            const decodedUri = decodeURIComponent(chat.workspaceUri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+            const matchedPId = pathToProjectId[decodedUri];
+            if (matchedPId) {
+                pId = matchedPId;
+            }
+        }
+        
         // If the chat doesn't belong to an active project, ignore it (it's archived or orphaned)
         if (!pId || !projectsDict[pId]) continue;
         
@@ -309,6 +356,8 @@ function transformTrajectoriesToProjectTree(summaries: Record<string, any>): any
             subagents: [],
         });
     }
+    
+    
     
     return [...projects.values()]
         .map(p => ({
@@ -574,8 +623,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
     });
 
     app.get('/api/files', async (req: Request, res: Response) => {
-        const uri = req.query.uri as string;
+        let uri = req.query.uri as string;
         try {
+            if (!uri || uri === "file:///") {
+                const projects = await getCachedProjectsTree();
+                if (projects && projects.length > 0 && projects[0].projectResources?.resources?.[0]?.folderUri) {
+                    uri = projects[0].projectResources.resources[0].folderUri;
+                }
+            }
             const data = await callRPC('ReadDir', { uri });
             res.json(data);
         } catch (err: any) {
@@ -690,7 +745,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
     // Search Endpoints
     app.get('/api/search/code', async (req: Request, res: Response) => {
         try {
-            const data = await callRPC('SearchCode', { query: req.query.query, workspaceUri: req.query.workspaceUri });
+            let wsUri = req.query.workspaceUri as string;
+            if (!wsUri) {
+                const projects = await getCachedProjectsTree();
+                if (projects && projects.length > 0 && projects[0].projectResources?.resources?.[0]?.folderUri) {
+                    wsUri = projects[0].projectResources.resources[0].folderUri;
+                }
+            }
+            const data = await callRPC('SearchCode', { query: req.query.query, workspaceUri: wsUri });
             res.json(data);
         } catch (err: any) {
             res.status(500).json({ error: err.message });
@@ -807,6 +869,11 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     return true;
                 }
                 
+                const configDirLower = path.normalize(path.join(GEMINI_DIR, 'config')).toLowerCase();
+                if (normalizedLower.startsWith(configDirLower)) {
+                    return true;
+                }
+
                 const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
                 if (fs.existsSync(projectsConfigDir)) {
                     try {
@@ -1006,6 +1073,18 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     } catch (err) {
                         ws.send(JSON.stringify({ type: 'ERROR', error: 'Failed to get quota summary' }));
                     }
+                } else if (msg.type === 'DELETE_CONVERSATION') {
+                    try {
+                        const { conversationId } = msg;
+                        if (!conversationId) throw new Error("Missing conversationId");
+                        const conversationPath = path.join(BRAIN_DIR, conversationId);
+                        if (fs.existsSync(conversationPath)) {
+                            fs.rmSync(conversationPath, { recursive: true, force: true });
+                        }
+                        ws.send(JSON.stringify({ type: 'EVENT', data: `Deleted conversation ${conversationId}` }));
+                    } catch (err: any) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: `Failed to delete: ${err.message}` }));
+                    }
                 } else if (msg.type === 'STOP_AGENT') {
                     try {
                         const { conversationId } = msg;
@@ -1059,8 +1138,45 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset, hasMore: false, isPagination: offset > 0 }));
                             }
                         } else {
-                            // Transcript file doesn't exist yet (e.g. new chat just created)
-                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: [], offset: 0, hasMore: false, isPagination: false }));
+                            // Transcript file doesn't exist yet — check messages/ for pending user messages
+                            const messagesDir = path.join(BRAIN_DIR, id, '.system_generated', 'messages');
+                            const pendingMsgs: any[] = [];
+                            if (fs.existsSync(messagesDir)) {
+                                const msgFiles = fs.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
+                                for (const mf of msgFiles) {
+                                    try {
+                                        const msgData = JSON.parse(fs.readFileSync(path.join(messagesDir, mf), 'utf-8'));
+                                        // Extract user text from USER_REQUEST tags
+                                        let userText = msgData.content || '';
+                                        const match = userText.match(/\[Отправлено с телефона\]:\s*(.*?)\\n/s);
+                                        if (match) userText = match[1].trim();
+                                        else {
+                                            const reqMatch = userText.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
+                                            if (reqMatch) userText = reqMatch[1].trim();
+                                        }
+                                        pendingMsgs.push({
+                                            step_index: 0,
+                                            source: 'USER_EXPLICIT',
+                                            type: 'USER_INPUT',
+                                            status: 'DONE',
+                                            created_at: msgData.timestamp || new Date().toISOString(),
+                                            content: userText,
+                                        });
+                                    } catch(e) {}
+                                }
+                            }
+                            if (pendingMsgs.length > 0) {
+                                // Add a system message indicating the agent hasn't started yet
+                                pendingMsgs.push({
+                                    step_index: 1,
+                                    source: 'SYSTEM',
+                                    type: 'PLANNER_RESPONSE',
+                                    status: 'DONE',
+                                    created_at: new Date().toISOString(),
+                                    content: '⏳ Сообщение отправлено. Ожидание запуска агента...',
+                                });
+                            }
+                            ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: pendingMsgs, offset: 0, hasMore: false, isPagination: false }));
                         }
                     } catch (err) {
                         console.error('[WebSocket] Error in GET_TRANSCRIPT:', err);
@@ -1082,7 +1198,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     if (!(ws as any).myCascadeStreams) (ws as any).myCascadeStreams = new Set<string>();
                     (ws as any).myCascadeStreams.add(conversationId);
 
-                    if (!msg.offset) {
+                    if (true) {
                         try {
                             const id = msg.id;
                         const logFile = path.join(BRAIN_DIR, id, '.system_generated', 'logs', 'transcript.jsonl');
@@ -1091,7 +1207,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 (ws as any).transcriptWatcher.close();
                             }
                             let currentSize = fs.statSync(logFile).size;
-                            (ws as any).transcriptWatcher = fs.watch(logFile, (eventType, filename) => {
+                            const watcher = fs.watch(logFile, (eventType, filename) => {
                                 try {
                                     const newSize = fs.statSync(logFile).size;
                                     if (newSize > currentSize) {
@@ -1123,6 +1239,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                     // ignore read errors
                                 }
                             });
+                            watcher.on('error', (err) => {
+                                console.log('[WebSocket] Watcher error ignored on deletion');
+                            });
+                            (ws as any).transcriptWatcher = watcher;
                         }
                     } catch (err) {}
                     }

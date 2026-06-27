@@ -12,6 +12,30 @@ const crypto_1 = __importDefault(require("crypto"));
 const os_1 = __importDefault(require("os"));
 const BRAIN_DIR = path_1.default.join(os_1.default.homedir(), '.gemini', 'antigravity', 'brain');
 /**
+ * Find the project UUID from ~/.gemini/config/projects/ by matching folder path.
+ */
+function findProjectIdByPath(projectPath) {
+    const projectsDir = path_1.default.join(os_1.default.homedir(), '.gemini', 'config', 'projects');
+    if (!fs_1.default.existsSync(projectsDir))
+        return null;
+    const normalizedInput = projectPath.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+    const files = fs_1.default.readdirSync(projectsDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+        try {
+            const data = JSON.parse(fs_1.default.readFileSync(path_1.default.join(projectsDir, file), 'utf-8'));
+            if (data.id && data.projectResources?.resources?.[0]?.folderUri) {
+                const uri = data.projectResources.resources[0].folderUri;
+                const decodedPath = decodeURIComponent(uri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+                if (decodedPath === normalizedInput) {
+                    return data.id;
+                }
+            }
+        }
+        catch (e) { }
+    }
+    return null;
+}
+/**
  * Send a message to an Antigravity agent conversation.
  *
  * Primary: Uses AgentAPI CLI which natively wakes the agent.
@@ -42,29 +66,66 @@ async function sendViaAgentAPI(conversationId, content) {
         return { success: false, method: 'agentapi', error: 'Language Server not found' };
     }
     if (conversationId.startsWith('START_NEW_AGENT_')) {
-        const newConvId = crypto_1.default.randomUUID();
-        const lsPath = discovery.agentApiPath;
-        console.log(`[Sender] Creating new conversation via AgentAPI: ${lsPath} agentapi new-conversation`);
+        const projectPath = conversationId.replace('START_NEW_AGENT_', '');
+        // Find projectId from config by matching folder path
+        const projectId = findProjectIdByPath(projectPath);
+        if (!projectId) {
+            console.error(`[Sender] Could not find projectId for path: ${projectPath}`);
+            return { success: false, method: 'agentapi', error: 'Project not found in config' };
+        }
+        // Use `agentapi new-conversation` with ANTIGRAVITY_PROJECT_ID env var.
+        // This creates the cascade, binds the workspace, AND starts the agent!
+        // IMPORTANT: CWD must be a clean dir (no .agents/) to avoid project_env_config conflicts
+        const tmpDir = path_1.default.join(os_1.default.tmpdir(), 'antigravity_newconv');
+        if (!fs_1.default.existsSync(tmpDir))
+            fs_1.default.mkdirSync(tmpDir, { recursive: true });
+        console.log(`[Sender] Creating new conversation via agentapi new-conversation (projectId: ${projectId})`);
         return new Promise((resolve) => {
-            (0, child_process_1.execFile)(lsPath, ['agentapi', 'new-conversation', content], {
+            const env = {
+                PATH: process.env.PATH || '',
+                SystemRoot: process.env.SystemRoot || 'C:\\WINDOWS',
+                APPDATA: process.env.APPDATA || '',
+                LOCALAPPDATA: process.env.LOCALAPPDATA || '',
+                USERPROFILE: process.env.USERPROFILE || '',
+                HOME: process.env.HOME || process.env.USERPROFILE || '',
+                ANTIGRAVITY_LS_ADDRESS: discovery.address,
+                ANTIGRAVITY_CSRF_TOKEN: discovery.csrfToken,
+                ANTIGRAVITY_PROJECT_ID: projectId,
+            };
+            (0, child_process_1.execFile)(discovery.agentApiPath, [
+                'agentapi', 'new-conversation', content
+            ], {
                 timeout: 30000,
+                encoding: 'utf8',
+                env,
+                cwd: tmpDir,
                 windowsHide: true,
             }, (err, stdout, stderr) => {
                 if (err) {
-                    console.error('[Sender] new-conversation failed:', err.message, stderr);
-                    // Fallback: write message to file
-                    sendViaFile(newConvId, content);
-                    resolve({ success: false, method: 'direct_spawn', error: err.message });
+                    console.error('[Sender] new-conversation failed:', err.message, stdout, stderr);
+                    resolve({ success: false, method: 'agentapi', error: err.message });
                     return;
                 }
-                console.log('[Sender] new-conversation result:', stdout.trim());
                 try {
                     const result = JSON.parse(stdout);
-                    const createdConvId = result?.response?.newConversation?.conversationId || newConvId;
-                    resolve({ success: true, method: 'direct_spawn', newConvId: createdConvId });
+                    if (result.error) {
+                        console.error('[Sender] new-conversation error:', result.error);
+                        resolve({ success: false, method: 'agentapi', error: result.error });
+                        return;
+                    }
+                    const newConvId = result.response?.newConversation?.conversationId;
+                    if (newConvId) {
+                        console.log(`[Sender] new-conversation created: ${newConvId} — agent started!`);
+                        resolve({ success: true, method: 'agentapi', newConvId });
+                    }
+                    else {
+                        console.error('[Sender] new-conversation: no conversationId in response', stdout);
+                        resolve({ success: false, method: 'agentapi', error: 'No conversationId returned' });
+                    }
                 }
                 catch {
-                    resolve({ success: true, method: 'direct_spawn', newConvId });
+                    console.error('[Sender] new-conversation: failed to parse response', stdout);
+                    resolve({ success: false, method: 'agentapi', error: 'Failed to parse response' });
                 }
             });
         });

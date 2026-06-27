@@ -10,6 +10,9 @@ const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const handlers_1 = require("./api/handlers");
 const discovery_1 = require("./agentapi/discovery");
+const authMiddleware_1 = require("./auth/authMiddleware");
+const auth_1 = require("./auth/auth");
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 // Read version from package.json
@@ -28,8 +31,31 @@ dotenv_1.default.config();
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 const wss = new ws_1.WebSocketServer({ server });
-app.use((0, cors_1.default)());
+// CORS: allow only localhost and private network ranges
+app.use((0, cors_1.default)({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin)
+            return callback(null, true);
+        // Allow localhost, 192.168.x.x, 10.x.x.x, 100.x.x.x (Tailscale)
+        if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|100\.)/i.test(origin)) {
+            return callback(null, true);
+        }
+        callback(new Error('CORS not allowed'));
+    }
+}));
 app.use(express_1.default.json());
+// Rate limit on pairing endpoint (5 attempts per minute per IP)
+const pairLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 5,
+    message: { error: 'Too many pairing attempts, try again later', code: 'RATE_LIMITED' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use('/api/pair', pairLimiter);
+// Authentication middleware (before routes)
+app.use(authMiddleware_1.authMiddleware);
 // Set up REST API routes
 (0, handlers_1.setupRoutes)(app, wss);
 const os_1 = __importDefault(require("os"));
@@ -118,7 +144,15 @@ function startServer(port) {
     server.listen(port, HOST)
         .on('listening', () => {
         const ipToShow = getTailscaleIp() || getLocalIp();
-        console.log(`\n=================================================`);
+        // Start pairing code rotation and display
+        (0, auth_1.startPairingCodeRotation)((code) => {
+            console.log(`\n🔐 Pairing Code : ${code}`);
+            console.log(`⏱️  Rotates every : 5 minutes\n`);
+            // Write code to file for external access
+            const codeFilePath = path_1.default.join(os_1.default.homedir(), '.gemini', 'antigravity', 'pairing_code.txt');
+            fs_1.default.writeFileSync(codeFilePath, code, 'utf-8');
+        });
+        console.log(`=================================================`);
         console.log(`🚀 Antigravity Remote Backend is RUNNING`);
         console.log(`=================================================`);
         console.log(`\n📱 Enter these settings in your Android App:\n`);

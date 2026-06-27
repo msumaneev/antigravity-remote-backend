@@ -5,6 +5,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { setupRoutes } from './api/handlers';
 import { initDiscovery } from './agentapi/discovery';
+import { authMiddleware } from './auth/authMiddleware';
+import { startPairingCodeRotation } from './auth/auth';
+import rateLimit from 'express-rate-limit';
 import fs from 'fs';
 import path from 'path';
 
@@ -25,8 +28,32 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-app.use(cors());
+// CORS: allow only localhost and private network ranges
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, curl, etc.)
+        if (!origin) return callback(null, true);
+        // Allow localhost, 192.168.x.x, 10.x.x.x, 100.x.x.x (Tailscale)
+        if (/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|100\.)/i.test(origin)) {
+            return callback(null, true);
+        }
+        callback(new Error('CORS not allowed'));
+    }
+}));
 app.use(express.json());
+
+// Rate limit on pairing endpoint (5 attempts per minute per IP)
+const pairLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    message: { error: 'Too many pairing attempts, try again later', code: 'RATE_LIMITED' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use('/api/pair', pairLimiter);
+
+// Authentication middleware (before routes)
+app.use(authMiddleware);
 
 // Set up REST API routes
 setupRoutes(app, wss);
@@ -130,7 +157,17 @@ function startServer(port: number) {
     server.listen(port, HOST)
         .on('listening', () => {
             const ipToShow = getTailscaleIp() || getLocalIp();
-            console.log(`\n=================================================`);
+            
+            // Start pairing code rotation and display
+            startPairingCodeRotation((code) => {
+                console.log(`\n🔐 Pairing Code : ${code}`);
+                console.log(`⏱️  Rotates every : 5 minutes\n`);
+                // Write code to file for external access
+                const codeFilePath = path.join(os.homedir(), '.gemini', 'antigravity', 'pairing_code.txt');
+                fs.writeFileSync(codeFilePath, code, 'utf-8');
+            });
+
+            console.log(`=================================================`);
             console.log(`🚀 Antigravity Remote Backend is RUNNING`);
             console.log(`=================================================`);
             console.log(`\n📱 Enter these settings in your Android App:\n`);

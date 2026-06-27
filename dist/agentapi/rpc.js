@@ -10,7 +10,7 @@ const agent = new https_1.default.Agent({ rejectUnauthorized: false });
 async function callRPC(method, body = {}, options = {}) {
     const ls = (0, discovery_1.discoverLanguageServer)();
     if (!ls)
-        throw new Error('Language Server not found');
+        return Promise.reject(new Error('Language Server not found'));
     const url = `https://127.0.0.1:${ls.httpsPort}/exa.language_server_pb.LanguageServerService/${method}`;
     const data = JSON.stringify(body);
     const timeoutMs = options.timeoutMs || 30000;

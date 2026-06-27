@@ -97,6 +97,13 @@ export class AgentStateStream extends EventEmitter {
                             
                             // Ensure conversationId is always present
                             mappedData.conversationId = this.conversationId;
+
+                            // DIAGNOSTIC: Log full requestedInteraction payload
+                            if (mappedData.requestedInteraction) {
+                                console.log('[StateStream] 🔍 requestedInteraction FULL PAYLOAD:');
+                                console.log(JSON.stringify(mappedData.requestedInteraction, null, 2));
+                                console.log('[StateStream] 🔍 requestedInteraction KEYS:', Object.keys(mappedData.requestedInteraction));
+                            }
                             
                             this.emit('state', mappedData);
                         } catch (err) {
