@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import { setupRoutes } from './api/handlers';
 import { initDiscovery } from './agentapi/discovery';
 import { authMiddleware } from './auth/authMiddleware';
-import { startPairingCodeRotation } from './auth/auth';
+import { startDiscovery } from './discovery';
 import rateLimit from 'express-rate-limit';
 import fs from 'fs';
 import path from 'path';
@@ -22,6 +22,22 @@ try {
 }
 
 dotenv.config();
+import crypto from 'crypto';
+let SERVER_ID = process.env.SERVER_ID;
+if (!SERVER_ID) {
+    const idFile = path.join(__dirname, '../../.server_id');
+    try {
+        if (fs.existsSync(idFile)) {
+            SERVER_ID = fs.readFileSync(idFile, 'utf8').trim();
+        } else {
+            SERVER_ID = crypto.randomUUID();
+            fs.writeFileSync(idFile, SERVER_ID, 'utf8');
+        }
+    } catch (e) {
+        SERVER_ID = crypto.randomUUID();
+    }
+}
+
 initDiscovery(); // Discover Language Server at startup (sync, one-time)
 
 const app = express();
@@ -50,7 +66,7 @@ const pairLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
 });
-app.use('/api/pair', pairLimiter);
+// app.use('/api/pair', pairLimiter); // Commented out because it causes 404s
 
 // Authentication middleware (before routes)
 app.use(authMiddleware);
@@ -111,7 +127,7 @@ setInterval(() => {
     });
 
     wss.clients.forEach(client => {
-        if (client.readyState === 1) { // 1 = OPEN
+        if (client.readyState === 1 && (client as any).subscribedToStats) { // 1 = OPEN
             client.send(payload);
         }
     });
@@ -158,19 +174,13 @@ function startServer(port: number) {
         .on('listening', () => {
             const ipToShow = getTailscaleIp() || getLocalIp();
             
-            // Start pairing code rotation and display
-            startPairingCodeRotation((code) => {
-                console.log(`\n🔐 Pairing Code : ${code}`);
-                console.log(`⏱️  Rotates every : 5 minutes\n`);
-                // Write code to file for external access
-                const codeFilePath = path.join(os.homedir(), '.gemini', 'antigravity', 'pairing_code.txt');
-                fs.writeFileSync(codeFilePath, code, 'utf-8');
-            });
+            // Start mDNS discovery
+            startDiscovery(port, SERVER_ID as string, SERVER_VERSION);
 
             console.log(`=================================================`);
             console.log(`🚀 Antigravity Remote Backend is RUNNING`);
             console.log(`=================================================`);
-            console.log(`\n📱 Enter these settings in your Android App:\n`);
+            console.log(`\n📱 Open http://localhost:${port} to view the pairing QR code\n`);
             console.log(`   IP Address : ${ipToShow}`);
             console.log(`   Port       : ${port}`);
             console.log(`\n=================================================\n`);

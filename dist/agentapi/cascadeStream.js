@@ -46,6 +46,19 @@ class CascadeReactiveStream extends events_1.EventEmitter {
                     buffer = buffer.subarray(5 + len);
                     try {
                         const data = JSON.parse(payload);
+                        // DIAGNOSTIC: Log cascade update keys to understand what data comes through
+                        const keys = Object.keys(data);
+                        if (keys.length > 0 && !keys.every(k => k === 'update')) {
+                            console.log('[CascadeStream] 🔍 UPDATE KEYS:', keys);
+                        }
+                        if (data.update) {
+                            const uKeys = Object.keys(data.update);
+                            // Log non-content updates (tool_calls, etc.)
+                            if (uKeys.some(k => k !== 'content' && k !== 'rawContent')) {
+                                console.log('[CascadeStream] 🔍 UPDATE.update KEYS:', uKeys);
+                                console.log('[CascadeStream] 🔍 FULL:', JSON.stringify(data, null, 2).substring(0, 2000));
+                            }
+                        }
                         this.emit('update', data);
                     }
                     catch { }

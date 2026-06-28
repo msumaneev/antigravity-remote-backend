@@ -1,6 +1,6 @@
 {
   "name": "backend",
-  "version": "2.1.7",
+  "version": "2.4.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -16,6 +16,7 @@
   "type": "commonjs",
   "dependencies": {
     "better-sqlite3": "^12.11.1",
+    "bonjour-service": "^1.4.2",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -23,6 +24,8 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
     "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4",
+    "uuid": "^14.0.1",
     "ws": "^8.21.0"
   },
   "devDependencies": {
@@ -32,7 +35,9 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
     "@types/node": "^26.0.1",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.0",
+    "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
     "nock": "^14.0.15",
     "nodemon": "^3.1.14",

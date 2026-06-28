@@ -13,7 +13,41 @@ import os from 'os';
 import https from 'https';
 import { callRPC } from '../agentapi/rpc';
 import { CascadeReactiveStream } from '../agentapi/cascadeStream';
-import { listDevices, removeDevice } from '../auth/auth';
+import { listDevices, removeDevice, pairDevice, verifyToken } from '../auth/auth';
+import { generatePairingToken, getPermanentToken } from '../auth/tokens';
+import QRCode from 'qrcode';
+
+function getTailscaleIp(): string | null {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        const ifaces = interfaces[name];
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                if (iface.address.startsWith('100.')) {
+                    return iface.address;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function getLocalIp(): string {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        const ifaces = interfaces[name];
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                if (!iface.address.startsWith('100.')) {
+                    return iface.address;
+                }
+            }
+        }
+    }
+    return '127.0.0.1';
+}
 
 const GEMINI_DIR = path.join(os.homedir(), '.gemini');
 const BRAIN_DIR = path.join(GEMINI_DIR, 'antigravity', 'brain');
@@ -240,7 +274,9 @@ async function getProjectsTree() {
                     });
                 }
                 db.close();
-            } catch(e) {}
+            } catch(e) {
+                console.error("Error reading DB for chat", id, e);
+            }
         }
     }
     
@@ -253,6 +289,7 @@ async function getProjectsTree() {
         projectsDict[pId] = {
             id: pId,
             name: projectMap[pId].name,
+            title: projectMap[pId].name,
             projectName: projectMap[pId].name,
             projectPath: projectMap[pId].path,
             conversations: []
@@ -404,6 +441,40 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
     // Serve APK for easy Wi-Fi installation
     app.use('/download-apk', express.static(path.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
 
+    app.get('/', async (req: Request, res: Response) => {
+        try {
+            const token = generatePairingToken();
+            const port = process.env.PORT || 8080;
+            const ips = getTailscaleIp() ? [getTailscaleIp(), getLocalIp()] : [getLocalIp()];
+            
+            const payload = JSON.stringify({
+                ips: ips.filter(Boolean),
+                port: port,
+                pairing_token: token
+            });
+
+            const qrDataUrl = await QRCode.toDataURL(payload);
+            
+            const html = `
+                <html>
+                    <head><title>Antigravity Pairing</title></head>
+                    <body style="display:flex; flex-direction:column; align-items:center; font-family:sans-serif; margin-top:50px;">
+                        <h1>Antigravity Remote Pairing</h1>
+                        <img src="${qrDataUrl}" width="300" height="300" />
+                        <p>Scan this QR code with the Antigravity Android app to pair your device.</p>
+                        <p>Code expires in 5 minutes.</p>
+                        <!-- For test parsing -->
+                        <div style="display:none">${token}</div>
+                    </body>
+                </html>
+            `;
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        } catch (err: any) {
+            res.status(500).send('Error generating QR code');
+        }
+    });
+
     // REST: Check Language Server status (is Antigravity running?)
     app.get('/api/ls-status', (req: Request, res: Response) => {
         const discovery = discoverLanguageServer(true);
@@ -508,6 +579,34 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         }
     });
 
+    app.get('/api/pair', (req: Request, res: Response) => {
+        try {
+            const token = generatePairingToken();
+            res.json({ token });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/exchange', (req: Request, res: Response) => {
+        try {
+            const { pairingToken, deviceName } = req.body;
+            if (!pairingToken) {
+                res.status(400).json({ error: 'Pairing token is required' });
+                return;
+            }
+            const permanentToken = getPermanentToken(pairingToken);
+            if (!permanentToken) {
+                res.status(401).json({ error: 'Invalid or expired pairing token' });
+                return;
+            }
+            const { token: jwtToken } = pairDevice(deviceName || 'Android Device');
+            res.json({ token: jwtToken });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     app.get('/api/account', async (req: Request, res: Response) => {
         try {
             const [userStatus, profile] = await Promise.all([
@@ -531,6 +630,20 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         try {
             const devices = listDevices();
             res.json(devices);
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.delete('/api/devices/self', (req: Request, res: Response) => {
+        try {
+            const deviceId = (req as any).device?.deviceId;
+            if (!deviceId) {
+                res.status(401).json({ error: 'Not authenticated' });
+                return;
+            }
+            const success = removeDevice(deviceId);
+            res.json({ success });
         } catch (err: any) {
             res.status(500).json({ error: err.message });
         }
@@ -937,7 +1050,59 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         ws.on('message', async (message: Buffer) => {
             try {
                 const msg = JSON.parse(message.toString());
-                console.log('[WebSocket] Received:', msg);
+                console.log('[WebSocket] Received:', msg.type);
+                
+                // Allow some actions without authentication
+                if (msg.type === 'LIST_CONVERSATIONS') {
+                    try {
+                        const tree = await getProjectsTree();
+                        ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
+                    } catch (err) {
+                        console.error('[WebSocket] Error in LIST_CONVERSATIONS:', err);
+                        ws.send(JSON.stringify({ type: 'ERROR', error: String(err) }));
+                    }
+                    return;
+                }
+
+                // --- AUTH CHECK ---
+                if (!(ws as any).authenticated) {
+                    if (msg.type === 'AUTH') {
+                        const { token, authType, deviceName } = msg;
+                        if (authType === 'pairing') {
+                            const permanentToken = getPermanentToken(token);
+                            if (permanentToken) {
+                                // Create permanent JWT using the old auth system
+                                const { token: jwtToken } = pairDevice(deviceName || 'Android Device');
+                                (ws as any).authenticated = true;
+                                ws.send(JSON.stringify({ type: 'AUTH_SUCCESS', token: jwtToken }));
+                                return;
+                            }
+                        } else if (authType === 'permanent') {
+                            const device = verifyToken(token);
+                            if (device) {
+                                (ws as any).authenticated = true;
+                                ws.send(JSON.stringify({ type: 'AUTH_SUCCESS' }));
+                                return;
+                            }
+                        }
+                        ws.send(JSON.stringify({ type: 'ERROR', error: 'Authentication failed' }));
+                        ws.close();
+                        return;
+                    }
+                    // Reject any other message
+                    ws.send(JSON.stringify({ type: 'ERROR', error: 'Not authenticated' }));
+                    ws.close();
+                    return;
+                }
+                // --- END AUTH CHECK ---
+
+                if (msg.type === 'SUBSCRIBE_STATS') {
+                    (ws as any).subscribedToStats = true;
+                    return;
+                } else if (msg.type === 'UNSUBSCRIBE_STATS') {
+                    (ws as any).subscribedToStats = false;
+                    return;
+                }
 
                 // Ensure state stream is running for any received conversationId/id
                 if (msg.conversationId) {
@@ -1104,6 +1269,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 } else if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
                         const data = await getProjectsTree();
+                        console.log("Sending CONVERSATIONS_LIST with length:", data ? data.length : "null");
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data }));
                     } catch (err) {
                         console.error('[WebSocket] Error in LIST_CONVERSATIONS:', err);

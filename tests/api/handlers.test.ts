@@ -13,6 +13,10 @@ vi.mock('../../src/agentapi/discovery', () => ({
     discoverLanguageServer: vi.fn(() => ({ pid: 1234, httpPort: 8080, httpsPort: 8081, csrfToken: 'token' })),
 }));
 
+vi.mock('../../src/auth/tokens', () => ({
+    generatePairingToken: vi.fn(() => 'mock-pairing-token'),
+}));
+
 vi.mock('../../src/agentapi/stateStream', () => ({
     agentStateStream: {
         connect: vi.fn(),
@@ -205,5 +209,13 @@ describe('Handlers API', () => {
         expect(res.status).toBe(200);
         expect(rpc.callRPC).toHaveBeenCalledWith('GetSlashCommands', { requestedModel: { model: 'MODEL_CUSTOM' } });
         expect(res.body[0].command).toBe('/test');
+    });
+
+    it('GET / returns HTML page with QR code', async () => {
+        const res = await request(app).get('/');
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toMatch(/html/);
+        expect(res.text).toContain('mock-pairing-token');
+        expect(res.text).toContain('<img');
     });
 });

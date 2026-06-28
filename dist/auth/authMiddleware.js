@@ -4,12 +4,14 @@ exports.authMiddleware = authMiddleware;
 const auth_1 = require("./auth");
 // Routes that don't require authentication
 const PUBLIC_PATHS = [
+    '/',
     '/api/health',
-    '/api/pair',
     '/download-apk',
+    '/api/exchange',
+    '/api/conversations'
 ];
 function isPublicPath(path) {
-    return PUBLIC_PATHS.some(pub => path === pub || path.startsWith(pub + '/'));
+    return PUBLIC_PATHS.some(pub => path === pub || path === pub + '/' || path.startsWith(pub + '/api') || (pub !== '/' && path.startsWith(pub + '/')));
 }
 /**
  * Express middleware that enforces JWT authentication on all routes

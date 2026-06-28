@@ -20,6 +20,40 @@ const https_1 = __importDefault(require("https"));
 const rpc_1 = require("../agentapi/rpc");
 const cascadeStream_1 = require("../agentapi/cascadeStream");
 const auth_1 = require("../auth/auth");
+const tokens_1 = require("../auth/tokens");
+const qrcode_1 = __importDefault(require("qrcode"));
+function getTailscaleIp() {
+    const interfaces = os_1.default.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        const ifaces = interfaces[name];
+        if (!ifaces)
+            continue;
+        for (const iface of ifaces) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                if (iface.address.startsWith('100.')) {
+                    return iface.address;
+                }
+            }
+        }
+    }
+    return null;
+}
+function getLocalIp() {
+    const interfaces = os_1.default.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        const ifaces = interfaces[name];
+        if (!ifaces)
+            continue;
+        for (const iface of ifaces) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                if (!iface.address.startsWith('100.')) {
+                    return iface.address;
+                }
+            }
+        }
+    }
+    return '127.0.0.1';
+}
 const GEMINI_DIR = path_1.default.join(os_1.default.homedir(), '.gemini');
 const BRAIN_DIR = path_1.default.join(GEMINI_DIR, 'antigravity', 'brain');
 function extractTitle(dir, id) {
@@ -246,7 +280,9 @@ async function getProjectsTree() {
                 }
                 db.close();
             }
-            catch (e) { }
+            catch (e) {
+                console.error("Error reading DB for chat", id, e);
+            }
         }
     }
     allChats.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -256,6 +292,7 @@ async function getProjectsTree() {
         projectsDict[pId] = {
             id: pId,
             name: projectMap[pId].name,
+            title: projectMap[pId].name,
             projectName: projectMap[pId].name,
             projectPath: projectMap[pId].path,
             conversations: []
@@ -388,6 +425,37 @@ function getOrCreateAgentStateStream(conversationId, wss) {
 function setupRoutes(app, wss) {
     // Serve APK for easy Wi-Fi installation
     app.use('/download-apk', express_1.default.static(path_1.default.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
+    app.get('/', async (req, res) => {
+        try {
+            const token = (0, tokens_1.generatePairingToken)();
+            const port = process.env.PORT || 8080;
+            const ips = getTailscaleIp() ? [getTailscaleIp(), getLocalIp()] : [getLocalIp()];
+            const payload = JSON.stringify({
+                ips: ips.filter(Boolean),
+                port: port,
+                pairing_token: token
+            });
+            const qrDataUrl = await qrcode_1.default.toDataURL(payload);
+            const html = `
+                <html>
+                    <head><title>Antigravity Pairing</title></head>
+                    <body style="display:flex; flex-direction:column; align-items:center; font-family:sans-serif; margin-top:50px;">
+                        <h1>Antigravity Remote Pairing</h1>
+                        <img src="${qrDataUrl}" width="300" height="300" />
+                        <p>Scan this QR code with the Antigravity Android app to pair your device.</p>
+                        <p>Code expires in 5 minutes.</p>
+                        <!-- For test parsing -->
+                        <div style="display:none">${token}</div>
+                    </body>
+                </html>
+            `;
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        }
+        catch (err) {
+            res.status(500).send('Error generating QR code');
+        }
+    });
     // REST: Check Language Server status (is Antigravity running?)
     app.get('/api/ls-status', (req, res) => {
         const discovery = (0, discovery_1.discoverLanguageServer)(true);
@@ -485,6 +553,34 @@ function setupRoutes(app, wss) {
             res.json({ ok: true, lsRunning: false, version: serverVersion });
         }
     });
+    app.get('/api/pair', (req, res) => {
+        try {
+            const token = (0, tokens_1.generatePairingToken)();
+            res.json({ token });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/exchange', (req, res) => {
+        try {
+            const { pairingToken, deviceName } = req.body;
+            if (!pairingToken) {
+                res.status(400).json({ error: 'Pairing token is required' });
+                return;
+            }
+            const permanentToken = (0, tokens_1.getPermanentToken)(pairingToken);
+            if (!permanentToken) {
+                res.status(401).json({ error: 'Invalid or expired pairing token' });
+                return;
+            }
+            const { token: jwtToken } = (0, auth_1.pairDevice)(deviceName || 'Android Device');
+            res.json({ token: jwtToken });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
     app.get('/api/account', async (req, res) => {
         try {
             const [userStatus, profile] = await Promise.all([
@@ -508,6 +604,20 @@ function setupRoutes(app, wss) {
         try {
             const devices = (0, auth_1.listDevices)();
             res.json(devices);
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.delete('/api/devices/self', (req, res) => {
+        try {
+            const deviceId = req.device?.deviceId;
+            if (!deviceId) {
+                res.status(401).json({ error: 'Not authenticated' });
+                return;
+            }
+            const success = (0, auth_1.removeDevice)(deviceId);
+            res.json({ success });
         }
         catch (err) {
             res.status(500).json({ error: err.message });
@@ -900,7 +1010,59 @@ function setupRoutes(app, wss) {
         ws.on('message', async (message) => {
             try {
                 const msg = JSON.parse(message.toString());
-                console.log('[WebSocket] Received:', msg);
+                console.log('[WebSocket] Received:', msg.type);
+                // Allow some actions without authentication
+                if (msg.type === 'LIST_CONVERSATIONS') {
+                    try {
+                        const tree = await getProjectsTree();
+                        ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
+                    }
+                    catch (err) {
+                        console.error('[WebSocket] Error in LIST_CONVERSATIONS:', err);
+                        ws.send(JSON.stringify({ type: 'ERROR', error: String(err) }));
+                    }
+                    return;
+                }
+                // --- AUTH CHECK ---
+                if (!ws.authenticated) {
+                    if (msg.type === 'AUTH') {
+                        const { token, authType, deviceName } = msg;
+                        if (authType === 'pairing') {
+                            const permanentToken = (0, tokens_1.getPermanentToken)(token);
+                            if (permanentToken) {
+                                // Create permanent JWT using the old auth system
+                                const { token: jwtToken } = (0, auth_1.pairDevice)(deviceName || 'Android Device');
+                                ws.authenticated = true;
+                                ws.send(JSON.stringify({ type: 'AUTH_SUCCESS', token: jwtToken }));
+                                return;
+                            }
+                        }
+                        else if (authType === 'permanent') {
+                            const device = (0, auth_1.verifyToken)(token);
+                            if (device) {
+                                ws.authenticated = true;
+                                ws.send(JSON.stringify({ type: 'AUTH_SUCCESS' }));
+                                return;
+                            }
+                        }
+                        ws.send(JSON.stringify({ type: 'ERROR', error: 'Authentication failed' }));
+                        ws.close();
+                        return;
+                    }
+                    // Reject any other message
+                    ws.send(JSON.stringify({ type: 'ERROR', error: 'Not authenticated' }));
+                    ws.close();
+                    return;
+                }
+                // --- END AUTH CHECK ---
+                if (msg.type === 'SUBSCRIBE_STATS') {
+                    ws.subscribedToStats = true;
+                    return;
+                }
+                else if (msg.type === 'UNSUBSCRIBE_STATS') {
+                    ws.subscribedToStats = false;
+                    return;
+                }
                 // Ensure state stream is running for any received conversationId/id
                 if (msg.conversationId) {
                     getOrCreateAgentStateStream(msg.conversationId, wss);
@@ -1092,6 +1254,7 @@ function setupRoutes(app, wss) {
                 else if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
                         const data = await getProjectsTree();
+                        console.log("Sending CONVERSATIONS_LIST with length:", data ? data.length : "null");
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data }));
                     }
                     catch (err) {
@@ -1191,7 +1354,7 @@ function setupRoutes(app, wss) {
                     if (!ws.myCascadeStreams)
                         ws.myCascadeStreams = new Set();
                     ws.myCascadeStreams.add(conversationId);
-                    if (!msg.offset) {
+                    if (true) {
                         try {
                             const id = msg.id;
                             const logFile = path_1.default.join(BRAIN_DIR, id, '.system_generated', 'logs', 'transcript.jsonl');

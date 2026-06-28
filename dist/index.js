@@ -11,7 +11,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const handlers_1 = require("./api/handlers");
 const discovery_1 = require("./agentapi/discovery");
 const authMiddleware_1 = require("./auth/authMiddleware");
-const auth_1 = require("./auth/auth");
+const discovery_2 = require("./discovery");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -27,6 +27,23 @@ catch (e) {
     console.error('Failed to read package.json version', e);
 }
 dotenv_1.default.config();
+const crypto_1 = __importDefault(require("crypto"));
+let SERVER_ID = process.env.SERVER_ID;
+if (!SERVER_ID) {
+    const idFile = path_1.default.join(__dirname, '../../.server_id');
+    try {
+        if (fs_1.default.existsSync(idFile)) {
+            SERVER_ID = fs_1.default.readFileSync(idFile, 'utf8').trim();
+        }
+        else {
+            SERVER_ID = crypto_1.default.randomUUID();
+            fs_1.default.writeFileSync(idFile, SERVER_ID, 'utf8');
+        }
+    }
+    catch (e) {
+        SERVER_ID = crypto_1.default.randomUUID();
+    }
+}
 (0, discovery_1.initDiscovery)(); // Discover Language Server at startup (sync, one-time)
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
@@ -53,7 +70,7 @@ const pairLimiter = (0, express_rate_limit_1.default)({
     standardHeaders: true,
     legacyHeaders: false,
 });
-app.use('/api/pair', pairLimiter);
+// app.use('/api/pair', pairLimiter); // Commented out because it causes 404s
 // Authentication middleware (before routes)
 app.use(authMiddleware_1.authMiddleware);
 // Set up REST API routes
@@ -100,7 +117,7 @@ setInterval(() => {
         }
     });
     wss.clients.forEach(client => {
-        if (client.readyState === 1) { // 1 = OPEN
+        if (client.readyState === 1 && client.subscribedToStats) { // 1 = OPEN
             client.send(payload);
         }
     });
@@ -144,18 +161,12 @@ function startServer(port) {
     server.listen(port, HOST)
         .on('listening', () => {
         const ipToShow = getTailscaleIp() || getLocalIp();
-        // Start pairing code rotation and display
-        (0, auth_1.startPairingCodeRotation)((code) => {
-            console.log(`\n🔐 Pairing Code : ${code}`);
-            console.log(`⏱️  Rotates every : 5 minutes\n`);
-            // Write code to file for external access
-            const codeFilePath = path_1.default.join(os_1.default.homedir(), '.gemini', 'antigravity', 'pairing_code.txt');
-            fs_1.default.writeFileSync(codeFilePath, code, 'utf-8');
-        });
+        // Start mDNS discovery
+        (0, discovery_2.startDiscovery)(port, SERVER_ID, SERVER_VERSION);
         console.log(`=================================================`);
         console.log(`🚀 Antigravity Remote Backend is RUNNING`);
         console.log(`=================================================`);
-        console.log(`\n📱 Enter these settings in your Android App:\n`);
+        console.log(`\n📱 Open http://localhost:${port} to view the pairing QR code\n`);
         console.log(`   IP Address : ${ipToShow}`);
         console.log(`   Port       : ${port}`);
         console.log(`\n=================================================\n`);
