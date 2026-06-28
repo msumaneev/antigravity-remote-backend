@@ -18,7 +18,11 @@ The backend connects directly to the Antigravity Language Server (LS) exactly li
 
 - **Auto-Discovery** — On startup, automatically locates the running Antigravity Language Server by inspecting local processes (detects port and CSRF token).
 - **Native Message Sending** — User input from the mobile app is sent natively using the LS command `workspace.executeCommand("agent.userInput")`.
-- **Zero Config** — Instantly connects to the local Antigravity LS securely without manual configuration.
+
+### 🔒 Security & Local Network Auto-Discovery
+- **Local Network Auto-Discovery (NSD)** — The backend broadcasts its presence on the local network. The Android app automatically discovers available servers without manual IP entry.
+- **Secure QR-Code Authentication** — Pairing a new device is done securely by scanning a dynamically generated QR code in the terminal. The backend validates requests using JWT tokens instead of relying solely on IP whitelists.
+- **Auto-Roaming** — If the PC's local IP address changes or it connects via a VPN (like Tailscale), the app automatically pings all known IPs and seamlessly restores the connection.
 
 ### ⚡ Real-Time Streaming & Smart Loading
 - **Live Status** — Subscribes to `agent.stateStream` to instantly push the agent's current status (Thinking, Executing, Error) to your phone.
