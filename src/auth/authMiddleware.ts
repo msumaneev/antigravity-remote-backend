@@ -27,13 +27,19 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
         return;
     }
 
+    let token = '';
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.slice(7);
+    } else if (req.query.token) {
+        token = req.query.token as string;
+    }
+
+    if (!token) {
         res.status(401).json({ error: 'Authentication required', code: 'NO_TOKEN' });
         return;
     }
 
-    const token = authHeader.slice(7); // Remove 'Bearer '
     const device = verifyToken(token);
 
     if (!device) {
