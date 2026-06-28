@@ -17,6 +17,7 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
 const https_1 = __importDefault(require("https"));
+const url_1 = require("url");
 const rpc_1 = require("../agentapi/rpc");
 const cascadeStream_1 = require("../agentapi/cascadeStream");
 const auth_1 = require("../auth/auth");
@@ -718,6 +719,42 @@ function setupRoutes(app, wss) {
                 }
             }
             const data = await (0, rpc_1.callRPC)('ReadDir', { uri });
+            if (data && Array.isArray(data.entries)) {
+                data.entries = data.entries.map((entry) => {
+                    let name = '';
+                    let isDirectory = false;
+                    let size = 0;
+                    let mtime = 0;
+                    if (entry.uri) {
+                        try {
+                            const decodedUri = decodeURIComponent(entry.uri);
+                            name = decodedUri.replace(/\/$/, '').split('/').pop() || '';
+                            if (entry.uri.startsWith('file://')) {
+                                const filePath = (0, url_1.fileURLToPath)(entry.uri);
+                                if (fs_1.default.existsSync(filePath)) {
+                                    const stat = fs_1.default.statSync(filePath);
+                                    isDirectory = stat.isDirectory();
+                                    size = isDirectory ? 0 : stat.size;
+                                    mtime = stat.mtime.getTime();
+                                }
+                            }
+                        }
+                        catch (e) {
+                            console.error('[Files] Error parsing entry', entry.uri, e);
+                        }
+                    }
+                    if (!isDirectory && entry.fileType) {
+                        isDirectory = entry.fileType === 2 || entry.fileType === 'directory';
+                    }
+                    return {
+                        ...entry,
+                        name: name || entry.name || '',
+                        isDirectory,
+                        size,
+                        mtime
+                    };
+                });
+            }
             res.json(data);
         }
         catch (err) {

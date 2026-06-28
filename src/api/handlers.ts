@@ -11,6 +11,7 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import https from 'https';
+import { fileURLToPath } from 'url';
 import { callRPC } from '../agentapi/rpc';
 import { CascadeReactiveStream } from '../agentapi/cascadeStream';
 import { listDevices, removeDevice, pairDevice, verifyToken } from '../auth/auth';
@@ -745,6 +746,45 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 }
             }
             const data = await callRPC('ReadDir', { uri });
+            if (data && Array.isArray(data.entries)) {
+                data.entries = data.entries.map((entry: any) => {
+                    let name = '';
+                    let isDirectory = false;
+                    let size = 0;
+                    let mtime = 0;
+
+                    if (entry.uri) {
+                        try {
+                            const decodedUri = decodeURIComponent(entry.uri);
+                            name = decodedUri.replace(/\/$/, '').split('/').pop() || '';
+                            
+                            if (entry.uri.startsWith('file://')) {
+                                const filePath = fileURLToPath(entry.uri);
+                                if (fs.existsSync(filePath)) {
+                                    const stat = fs.statSync(filePath);
+                                    isDirectory = stat.isDirectory();
+                                    size = isDirectory ? 0 : stat.size;
+                                    mtime = stat.mtime.getTime();
+                                }
+                            }
+                        } catch (e) {
+                            console.error('[Files] Error parsing entry', entry.uri, e);
+                        }
+                    }
+                    
+                    if (!isDirectory && entry.fileType) {
+                        isDirectory = entry.fileType === 2 || entry.fileType === 'directory';
+                    }
+
+                    return {
+                        ...entry,
+                        name: name || entry.name || '',
+                        isDirectory,
+                        size,
+                        mtime
+                    };
+                });
+            }
             res.json(data);
         } catch (err: any) {
             res.status(500).json({ error: err.message });
