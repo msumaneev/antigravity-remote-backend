@@ -23,6 +23,7 @@ const cascadeStream_1 = require("../agentapi/cascadeStream");
 const auth_1 = require("../auth/auth");
 const tokens_1 = require("../auth/tokens");
 const qrcode_1 = __importDefault(require("qrcode"));
+const chatHtml_1 = require("./chatHtml");
 function getTailscaleIp() {
     const interfaces = os_1.default.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
@@ -517,6 +518,23 @@ function setupRoutes(app, wss) {
     // Serve APK for easy Wi-Fi installation
     app.use('/download-apk', express_1.default.static(path_1.default.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
     app.get('/', async (req, res) => {
+        try {
+            const token = (0, tokens_1.generatePairingToken)();
+            const html = (0, chatHtml_1.getChatHtml)(token);
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        }
+        catch (err) {
+            res.status(500).send('Error rendering Web Chat');
+        }
+    });
+    app.get('/admin', async (req, res) => {
+        const ip = req.ip || req.socket.remoteAddress || '';
+        const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.endsWith('127.0.0.1');
+        if (!isLocal) {
+            res.status(403).send('Forbidden: Admin console is only accessible from localhost');
+            return;
+        }
         try {
             const token = (0, tokens_1.generatePairingToken)();
             const port = process.env.PORT || 8080;
@@ -1132,6 +1150,11 @@ function setupRoutes(app, wss) {
     });
     app.get('/api/devices', (req, res) => {
         try {
+            const requester = req.device;
+            if (!requester || requester.deviceId !== 'local-admin') {
+                res.status(403).json({ error: 'Forbidden: Only local administrator can access this endpoint' });
+                return;
+            }
             const devices = (0, auth_1.listDevices)();
             res.json(devices);
         }
@@ -1155,6 +1178,11 @@ function setupRoutes(app, wss) {
     });
     app.delete('/api/devices/:id', (req, res) => {
         try {
+            const requester = req.device;
+            if (!requester || requester.deviceId !== 'local-admin') {
+                res.status(403).json({ error: 'Forbidden: Only local administrator can access this endpoint' });
+                return;
+            }
             const success = (0, auth_1.removeDevice)(req.params.id);
             res.json({ success });
         }
@@ -1165,8 +1193,8 @@ function setupRoutes(app, wss) {
     app.post('/api/devices/:id/restrict', (req, res) => {
         try {
             const requester = req.device;
-            if (requester && requester.allowed_project_id) {
-                res.status(403).json({ error: 'Forbidden: Restricted devices cannot modify restrictions' });
+            if (!requester || requester.deviceId !== 'local-admin') {
+                res.status(403).json({ error: 'Forbidden: Only local administrator can access this endpoint' });
                 return;
             }
             const { projectId } = req.body;

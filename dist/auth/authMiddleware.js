@@ -5,6 +5,7 @@ const auth_1 = require("./auth");
 // Routes that don't require authentication
 const PUBLIC_PATHS = [
     '/',
+    '/admin',
     '/api/health',
     '/download-apk',
     '/api/exchange',
