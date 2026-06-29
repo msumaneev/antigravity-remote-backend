@@ -12,6 +12,7 @@ exports.pairDevice = pairDevice;
 exports.verifyToken = verifyToken;
 exports.listDevices = listDevices;
 exports.removeDevice = removeDevice;
+exports.restrictDevice = restrictDevice;
 exports.hasAnyPairedDevices = hasAnyPairedDevices;
 const crypto_1 = __importDefault(require("crypto"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
@@ -59,6 +60,12 @@ function getDb() {
             last_seen INTEGER
         )
     `);
+    try {
+        db.exec(`ALTER TABLE paired_devices ADD COLUMN allowed_project_id TEXT`);
+    }
+    catch (e) {
+        // Column already exists, ignore
+    }
     return db;
 }
 // Initialize DB on module load
@@ -115,28 +122,37 @@ function verifyToken(token) {
     try {
         const payload = jsonwebtoken_1.default.verify(token, JWT_SECRET);
         // Check device still exists in DB
-        const device = db.prepare('SELECT id FROM paired_devices WHERE id = ?').get(payload.deviceId);
+        const device = db.prepare('SELECT id, allowed_project_id FROM paired_devices WHERE id = ?').get(payload.deviceId);
         if (!device)
             return null;
         // Update last_seen
         db.prepare('UPDATE paired_devices SET last_seen = ? WHERE id = ?').run(Date.now(), payload.deviceId);
-        return { deviceId: payload.deviceId, deviceName: payload.deviceName };
+        return {
+            deviceId: payload.deviceId,
+            deviceName: payload.deviceName,
+            allowed_project_id: device.allowed_project_id || null
+        };
     }
     catch {
         return null;
     }
 }
 function listDevices() {
-    const rows = db.prepare('SELECT id, name, paired_at, last_seen FROM paired_devices ORDER BY paired_at DESC').all();
+    const rows = db.prepare('SELECT id, name, paired_at, last_seen, allowed_project_id FROM paired_devices ORDER BY paired_at DESC').all();
     return rows.map(row => ({
         id: row.id,
         name: row.name,
         pairedAt: row.paired_at,
         lastSeen: row.last_seen,
+        allowed_project_id: row.allowed_project_id || null
     }));
 }
 function removeDevice(deviceId) {
     const result = db.prepare('DELETE FROM paired_devices WHERE id = ?').run(deviceId);
+    return result.changes > 0;
+}
+function restrictDevice(deviceId, projectId) {
+    const result = db.prepare('UPDATE paired_devices SET allowed_project_id = ? WHERE id = ?').run(projectId, deviceId);
     return result.changes > 0;
 }
 function hasAnyPairedDevices() {

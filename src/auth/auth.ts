@@ -51,6 +51,11 @@ function getDb(): Database.Database {
             last_seen INTEGER
         )
     `);
+    try {
+        db.exec(`ALTER TABLE paired_devices ADD COLUMN allowed_project_id TEXT`);
+    } catch (e) {
+        // Column already exists, ignore
+    }
     return db;
 }
 
@@ -104,6 +109,7 @@ export interface PairedDevice {
     name: string;
     pairedAt: number;
     lastSeen: number | null;
+    allowed_project_id?: string | null;
 }
 
 export function pairDevice(deviceName: string): { token: string; deviceId: string } {
@@ -123,20 +129,24 @@ export function pairDevice(deviceName: string): { token: string; deviceId: strin
     return { token, deviceId };
 }
 
-export function verifyToken(token: string | null | undefined): { deviceId: string; deviceName: string } | null {
+export function verifyToken(token: string | null | undefined): { deviceId: string; deviceName: string; allowed_project_id?: string | null } | null {
     if (!token) return null;
 
     try {
         const payload = jwt.verify(token, JWT_SECRET) as { deviceId: string; deviceName: string };
         
         // Check device still exists in DB
-        const device = db.prepare('SELECT id FROM paired_devices WHERE id = ?').get(payload.deviceId) as any;
+        const device = db.prepare('SELECT id, allowed_project_id FROM paired_devices WHERE id = ?').get(payload.deviceId) as any;
         if (!device) return null;
 
         // Update last_seen
         db.prepare('UPDATE paired_devices SET last_seen = ? WHERE id = ?').run(Date.now(), payload.deviceId);
 
-        return { deviceId: payload.deviceId, deviceName: payload.deviceName };
+        return { 
+            deviceId: payload.deviceId, 
+            deviceName: payload.deviceName,
+            allowed_project_id: device.allowed_project_id || null
+        };
     } catch {
         return null;
     }
@@ -144,7 +154,7 @@ export function verifyToken(token: string | null | undefined): { deviceId: strin
 
 export function listDevices(): PairedDevice[] {
     const rows = db.prepare(
-        'SELECT id, name, paired_at, last_seen FROM paired_devices ORDER BY paired_at DESC'
+        'SELECT id, name, paired_at, last_seen, allowed_project_id FROM paired_devices ORDER BY paired_at DESC'
     ).all() as any[];
 
     return rows.map(row => ({
@@ -152,11 +162,17 @@ export function listDevices(): PairedDevice[] {
         name: row.name,
         pairedAt: row.paired_at,
         lastSeen: row.last_seen,
+        allowed_project_id: row.allowed_project_id || null
     }));
 }
 
 export function removeDevice(deviceId: string): boolean {
     const result = db.prepare('DELETE FROM paired_devices WHERE id = ?').run(deviceId);
+    return result.changes > 0;
+}
+
+export function restrictDevice(deviceId: string, projectId: string | null): boolean {
+    const result = db.prepare('UPDATE paired_devices SET allowed_project_id = ? WHERE id = ?').run(projectId, deviceId);
     return result.changes > 0;
 }
 

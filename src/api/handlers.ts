@@ -14,7 +14,7 @@ import https from 'https';
 import { fileURLToPath } from 'url';
 import { callRPC } from '../agentapi/rpc';
 import { CascadeReactiveStream } from '../agentapi/cascadeStream';
-import { listDevices, removeDevice, pairDevice, verifyToken } from '../auth/auth';
+import { listDevices, removeDevice, pairDevice, verifyToken, restrictDevice } from '../auth/auth';
 import { generatePairingToken, getPermanentToken } from '../auth/tokens';
 import QRCode from 'qrcode';
 
@@ -438,6 +438,84 @@ export function getOrCreateAgentStateStream(conversationId: string, wss: WebSock
     return stream;
 }
 
+async function checkDeviceProjectAccess(msg: any, device: any): Promise<boolean> {
+    if (!device) return true; // Before auth is fully set up, let AUTH messages pass
+    if (!device.allowed_project_id) return true; // Unrestricted admin device
+
+    const allowedProjectId = device.allowed_project_id;
+
+    // Block interactive terminal commands entirely for restricted devices
+    if (msg.type === 'KILL') return false;
+    if (msg.type === 'START_AGENT') return false;
+    if (msg.type === 'SEND_INPUT' && !msg.conversationId) return false;
+
+    // 1. If projectPath is specified (verify it matches allowed project)
+    if (msg.projectPath) {
+        try {
+            const tree = await getCachedProjectsTree();
+            const project = tree.find((p: any) => 
+                p.id === allowedProjectId || 
+                p.name === allowedProjectId ||
+                p.projectName === allowedProjectId
+            );
+            if (!project) return false;
+            
+            const normProject = (project.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+            const normInput = (msg.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+            return normProject === normInput;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // 2. If conversationId or id is specified (verify it belongs to allowed project)
+    const convId = msg.conversationId || msg.id;
+    if (convId) {
+        if (typeof convId === 'string' && convId.startsWith('START_NEW_AGENT_')) {
+            const projectPath = convId.replace('START_NEW_AGENT_', '');
+            try {
+                const tree = await getCachedProjectsTree();
+                const project = tree.find((p: any) => 
+                    p.id === allowedProjectId || 
+                    p.name === allowedProjectId ||
+                    p.projectName === allowedProjectId
+                );
+                if (!project) return false;
+                
+                const normProject = (project.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                const normInput = projectPath.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                return normProject === normInput;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        try {
+            const tree = await getCachedProjectsTree();
+            const project = tree.find((p: any) => 
+                p.id === allowedProjectId || 
+                p.name === allowedProjectId ||
+                p.projectName === allowedProjectId
+            );
+            if (!project) return false;
+
+            const findInConversations = (convs: any[]): boolean => {
+                for (const c of convs) {
+                    if (c.id === convId) return true;
+                    if (c.subagents && findInConversations(c.subagents)) return true;
+                }
+                return false;
+            };
+
+            return findInConversations(project.conversations || []);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 export function setupRoutes(app: Express, wss: WebSocketServer) {
     // Serve APK for easy Wi-Fi installation
     app.use('/download-apk', express.static(path.join(__dirname, '../../../android/app/build/outputs/apk/debug')));
@@ -457,16 +535,453 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             const qrDataUrl = await QRCode.toDataURL(payload);
             
             const html = `
-                <html>
-                    <head><title>Antigravity Pairing</title></head>
-                    <body style="display:flex; flex-direction:column; align-items:center; font-family:sans-serif; margin-top:50px;">
-                        <h1>Antigravity Remote Pairing</h1>
-                        <img src="${qrDataUrl}" width="300" height="300" />
-                        <p>Scan this QR code with the Antigravity Android app to pair your device.</p>
-                        <p>Code expires in 5 minutes.</p>
-                        <!-- For test parsing -->
-                        <div style="display:none">${token}</div>
-                    </body>
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <title>Antigravity Remote Admin Console</title>
+                    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+                    <style>
+                        :root {
+                            --bg-color: #0f172a;
+                            --card-bg: rgba(30, 41, 59, 0.7);
+                            --card-border: rgba(255, 255, 255, 0.08);
+                            --text-primary: #f8fafc;
+                            --text-secondary: #94a3b8;
+                            --accent-color: #6366f1;
+                            --accent-hover: #4f46e5;
+                            --danger-color: #ef4444;
+                            --danger-hover: #dc2626;
+                            --success-color: #10b981;
+                            --glass-blur: blur(12px);
+                        }
+
+                        * {
+                            box-sizing: border-box;
+                            margin: 0;
+                            padding: 0;
+                        }
+
+                        body {
+                            background-color: var(--bg-color);
+                            color: var(--text-primary);
+                            font-family: 'Outfit', sans-serif;
+                            min-height: 100vh;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            padding: 2rem 1rem;
+                            background-image: 
+                                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+                                radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.1) 0%, transparent 40%);
+                            background-attachment: fixed;
+                        }
+
+                        header {
+                            text-align: center;
+                            margin-bottom: 3rem;
+                            animation: fadeInDown 0.8s ease-out;
+                        }
+
+                        header h1 {
+                            font-size: 2.5rem;
+                            font-weight: 800;
+                            background: linear-gradient(135deg, #a5b4fc 0%, #6366f1 50%, #34d399 100%);
+                            -webkit-background-clip: text;
+                            -webkit-text-fill-color: transparent;
+                            margin-bottom: 0.5rem;
+                            letter-spacing: -0.025em;
+                        }
+
+                        header p {
+                            color: var(--text-secondary);
+                            font-size: 1.1rem;
+                        }
+
+                        .container {
+                            max-width: 1200px;
+                            width: 100%;
+                            display: grid;
+                            grid-template-columns: 1fr;
+                            gap: 2rem;
+                            animation: fadeIn 1s ease-out;
+                        }
+
+                        @media (min-width: 900px) {
+                            .container {
+                                grid-template-columns: 380px 1fr;
+                            }
+                        }
+
+                        .panel {
+                            background: var(--card-bg);
+                            backdrop-filter: var(--glass-blur);
+                            border: 1px solid var(--card-border);
+                            border-radius: 24px;
+                            padding: 2rem;
+                            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+                            transition: transform 0.3s ease, box-shadow 0.3s ease;
+                        }
+
+                        .panel:hover {
+                            transform: translateY(-2px);
+                            box-shadow: 0 25px 30px -5px rgba(0, 0, 0, 0.4), 0 15px 15px -5px rgba(0, 0, 0, 0.3);
+                        }
+
+                        .panel h2 {
+                            font-size: 1.4rem;
+                            font-weight: 600;
+                            margin-bottom: 1.5rem;
+                            display: flex;
+                            align-items: center;
+                            gap: 0.5rem;
+                            color: #a5b4fc;
+                        }
+
+                        .qr-section {
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            text-align: center;
+                        }
+
+                        .qr-container {
+                            background: white;
+                            padding: 1rem;
+                            border-radius: 20px;
+                            box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.3);
+                            margin-bottom: 1.5rem;
+                            transition: transform 0.3s ease;
+                        }
+
+                        .qr-container:hover {
+                            transform: scale(1.03);
+                        }
+
+                        .qr-container img {
+                            display: block;
+                            max-width: 100%;
+                            height: auto;
+                        }
+
+                        .qr-info {
+                            font-size: 0.95rem;
+                            color: var(--text-secondary);
+                            line-height: 1.5;
+                        }
+
+                        .qr-info strong {
+                            color: var(--text-primary);
+                        }
+
+                        .device-card {
+                            background: rgba(15, 23, 42, 0.4);
+                            border: 1px solid var(--card-border);
+                            border-radius: 16px;
+                            padding: 1.25rem;
+                            margin-bottom: 1rem;
+                            display: flex;
+                            flex-direction: column;
+                            gap: 1rem;
+                            transition: all 0.2s ease;
+                        }
+
+                        .device-card:hover {
+                            border-color: rgba(99, 102, 241, 0.3);
+                            background: rgba(15, 23, 42, 0.6);
+                        }
+
+                        .device-header {
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: flex-start;
+                        }
+
+                        .device-name {
+                            font-weight: 600;
+                            font-size: 1.1rem;
+                            color: var(--text-primary);
+                        }
+
+                        .device-meta {
+                            font-size: 0.8rem;
+                            color: var(--text-secondary);
+                            display: flex;
+                            flex-direction: column;
+                            gap: 0.25rem;
+                            margin-top: 0.25rem;
+                        }
+
+                        .badge {
+                            font-size: 0.75rem;
+                            font-weight: 600;
+                            padding: 0.25rem 0.6rem;
+                            border-radius: 9999px;
+                            text-transform: uppercase;
+                        }
+
+                        .badge-active {
+                            background-color: rgba(16, 185, 129, 0.15);
+                            color: var(--success-color);
+                            border: 1px solid rgba(16, 185, 129, 0.3);
+                        }
+
+                        .badge-restricted {
+                            background-color: rgba(245, 158, 11, 0.15);
+                            color: #f59e0b;
+                            border: 1px solid rgba(245, 158, 11, 0.3);
+                        }
+
+                        .control-group {
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 0.5rem;
+                            align-items: center;
+                        }
+
+                        select {
+                            background: #1e293b;
+                            border: 1px solid var(--card-border);
+                            color: var(--text-primary);
+                            padding: 0.6rem 1rem;
+                            border-radius: 10px;
+                            font-family: inherit;
+                            font-size: 0.9rem;
+                            flex: 1;
+                            min-width: 180px;
+                            outline: none;
+                            cursor: pointer;
+                            transition: border-color 0.2s;
+                        }
+
+                        select:focus {
+                            border-color: var(--accent-color);
+                        }
+
+                        button {
+                            padding: 0.6rem 1.2rem;
+                            border-radius: 10px;
+                            font-family: inherit;
+                            font-weight: 600;
+                            font-size: 0.9rem;
+                            border: none;
+                            cursor: pointer;
+                            transition: all 0.2s ease;
+                            display: inline-flex;
+                            align-items: center;
+                            justify-content: center;
+                        }
+
+                        .btn-primary {
+                            background: var(--accent-color);
+                            color: white;
+                        }
+
+                        .btn-primary:hover {
+                            background: var(--accent-hover);
+                        }
+
+                        .btn-danger {
+                            background: rgba(239, 68, 68, 0.1);
+                            color: var(--danger-color);
+                            border: 1px solid rgba(239, 68, 68, 0.2);
+                        }
+
+                        .btn-danger:hover {
+                            background: var(--danger-color);
+                            color: white;
+                        }
+
+                        .empty-state {
+                            text-align: center;
+                            padding: 3rem 1rem;
+                            color: var(--text-secondary);
+                        }
+
+                        .empty-state svg {
+                            width: 48px;
+                            height: 48px;
+                            margin-bottom: 1rem;
+                            stroke: var(--text-secondary);
+                        }
+
+                        @keyframes fadeInDown {
+                            from {
+                                opacity: 0;
+                                transform: translateY(-20px);
+                            }
+                            to {
+                                opacity: 1;
+                                transform: translateY(0);
+                            }
+                        }
+
+                        @keyframes fadeIn {
+                            from { opacity: 0; }
+                            to { opacity: 1; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <header>
+                        <h1>Antigravity Remote Console</h1>
+                        <p>Управление сопряженными устройствами и изоляцией проектов</p>
+                    </header>
+
+                    <div class="container">
+                        <!-- Left Panel: QR Code Pairing -->
+                        <div class="panel qr-section">
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17h.01M19 17h.01M5 7h.01M19 7h.01M7 12h10M12 7v10"/></svg>
+                                Сопряжение
+                            </h2>
+                            <div class="qr-container">
+                                <img src="${qrDataUrl}" alt="Pairing QR Code" />
+                            </div>
+                            <div class="qr-info">
+                                <p>Откройте приложение <strong>Antigravity Remote</strong> на смартфоне и отсканируйте этот QR-код для подключения.</p>
+                                <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Токен действителен 5 минут.</p>
+                                <!-- For test parsing -->
+                                <div style="display:none">${token}</div>
+                            </div>
+                        </div>
+
+                        <!-- Right Panel: Device Management -->
+                        <div class="panel">
+                            <h2>
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                                Устройства в сети
+                            </h2>
+                            <div id="device-list">
+                                <div class="empty-state">Загрузка списка устройств...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <script>
+                        let projects = [];
+                        let devices = [];
+
+                        async function init() {
+                            await loadProjects();
+                            await loadDevices();
+                        }
+
+                        async function loadProjects() {
+                            try {
+                                const res = await fetch('/api/projects');
+                                projects = await res.json();
+                            } catch (e) {
+                                console.error('Failed to load projects', e);
+                            }
+                        }
+
+                        async function loadDevices() {
+                            try {
+                                const res = await fetch('/api/devices');
+                                devices = await res.json();
+                                renderDevices();
+                            } catch (e) {
+                                document.getElementById('device-list').innerHTML = 
+                                    '<div class="empty-state">Ошибка загрузки списка устройств</div>';
+                            }
+                        }
+
+                        async function restrictDevice(deviceId, projectId) {
+                            try {
+                                const res = await fetch(\`/api/devices/\${deviceId}/restrict\`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ projectId })
+                                });
+                                const result = await res.json();
+                                if (result.success) {
+                                    await loadDevices();
+                                } else {
+                                    alert('Не удалось обновить ограничения: ' + (result.error || 'Неизвестная ошибка'));
+                                }
+                            } catch (e) {
+                                alert('Ошибка соединения с сервером');
+                            }
+                        }
+
+                        async function deleteDevice(deviceId) {
+                            if (!confirm('Вы уверены, что хотите удалить это устройство?')) return;
+                            try {
+                                const res = await fetch(\`/api/devices/\${deviceId}\`, {
+                                    method: 'DELETE'
+                                });
+                                const result = await res.json();
+                                if (result.success) {
+                                    await loadDevices();
+                                } else {
+                                    alert('Не удалось удалить устройство');
+                                }
+                            } catch (e) {
+                                alert('Ошибка соединения с сервером');
+                            }
+                        }
+
+                        function renderDevices() {
+                            const listEl = document.getElementById('device-list');
+                            if (devices.length === 0) {
+                                listEl.innerHTML = \`
+                                    <div class="empty-state">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                                        <p>Нет подключенных устройств</p>
+                                    </div>
+                                \`;
+                                return;
+                            }
+
+                            listEl.innerHTML = devices.map(device => {
+                                const pairedDate = new Date(device.pairedAt).toLocaleString();
+                                const lastSeenDate = device.lastSeen ? new Date(device.lastSeen).toLocaleString() : 'Никогда';
+                                
+                                const isRestricted = !!device.allowed_project_id;
+                                const badgeClass = isRestricted ? 'badge-restricted' : 'badge-active';
+                                const badgeText = isRestricted ? 'Ограничен' : 'Полный доступ';
+
+                                const projectOptions = [
+                                    '<option value="">-- Полный доступ (Без ограничений) --</option>',
+                                    ...projects.map(p => {
+                                        const selected = device.allowed_project_id === p.id || device.allowed_project_id === p.projectName ? 'selected' : '';
+                                        return \`<option value="\${p.id || p.projectName}" \${selected}>\${p.projectName || p.name}</option>\`;
+                                    })
+                                ].join('');
+
+                                return \`
+                                    <div class="device-card">
+                                        <div class="device-header">
+                                            <div>
+                                                <div class="device-name">\${escapeHtml(device.name)}</div>
+                                                <div class="device-meta">
+                                                    <span>ID: \${device.id}</span>
+                                                    <span>Сопряжено: \${pairedDate}</span>
+                                                    <span>Активность: \${lastSeenDate}</span>
+                                                </div>
+                                            </div>
+                                            <span class="badge \${badgeClass}">\${badgeText}</span>
+                                        </div>
+                                        <div class="control-group">
+                                            <select onchange="restrictDevice('\${device.id}', this.value)">
+                                                \${projectOptions}
+                                            </select>
+                                            <button class="btn-danger" onclick="deleteDevice('\${device.id}')">Удалить</button>
+                                        </div>
+                                    </div>
+                                \`;
+                            }).join('');
+                        }
+
+                        function escapeHtml(str) {
+                            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+                        }
+
+                        init();
+                    </script>
+                </body>
                 </html>
             `;
             res.setHeader('Content-Type', 'text/html');
@@ -533,10 +1048,26 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
     app.get('/api/trajectories', async (req: Request, res: Response) => {
         try {
             const data = await callRPC('GetAllCascadeTrajectories');
-            const tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
+            let tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
+            const allowedProjectId = (req as any).device?.allowed_project_id;
+            if (allowedProjectId) {
+                tree = tree.filter((p: any) => 
+                    p.id === allowedProjectId || 
+                    p.name === allowedProjectId ||
+                    p.projectName === allowedProjectId
+                );
+            }
             res.json(tree);
         } catch (err) {
-            const tree = await getCachedProjectsTree();
+            let tree = await getCachedProjectsTree();
+            const allowedProjectId = (req as any).device?.allowed_project_id;
+            if (allowedProjectId) {
+                tree = tree.filter((p: any) => 
+                    p.id === allowedProjectId || 
+                    p.name === allowedProjectId ||
+                    p.projectName === allowedProjectId
+                );
+            }
             res.json(tree);
         }
     });
@@ -659,6 +1190,21 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         }
     });
 
+    app.post('/api/devices/:id/restrict', (req: Request, res: Response) => {
+        try {
+            const requester = (req as any).device;
+            if (requester && requester.allowed_project_id) {
+                res.status(403).json({ error: 'Forbidden: Restricted devices cannot modify restrictions' });
+                return;
+            }
+            const { projectId } = req.body;
+            const success = restrictDevice(req.params.id as string, projectId || null);
+            res.json({ success });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     app.get('/api/mcp', async (req: Request, res: Response) => {
         try {
             const data = await callRPC('GetMcpServerStates');
@@ -738,8 +1284,31 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
     app.get('/api/files', async (req: Request, res: Response) => {
         let uri = req.query.uri as string;
+        const allowedProjectId = (req as any).device?.allowed_project_id;
         try {
-            if (!uri || uri === "file:///") {
+            if (allowedProjectId) {
+                const tree = await getCachedProjectsTree();
+                const project = tree.find((p: any) => 
+                    p.id === allowedProjectId || 
+                    p.name === allowedProjectId ||
+                    p.projectName === allowedProjectId
+                );
+                if (!project) {
+                    res.status(403).json({ error: 'Access denied' });
+                    return;
+                }
+                const allowedPath = decodeURIComponent(project.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                
+                if (!uri || uri === "file:///") {
+                    uri = project.projectPath;
+                } else {
+                    const reqPath = decodeURIComponent(uri).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                    if (!reqPath.startsWith(allowedPath)) {
+                        res.status(403).json({ error: 'Access denied: Out of project scope' });
+                        return;
+                    }
+                }
+            } else if (!uri || uri === "file:///") {
                 const projects = await getCachedProjectsTree();
                 if (projects && projects.length > 0 && projects[0].projectResources?.resources?.[0]?.folderUri) {
                     uri = projects[0].projectResources.resources[0].folderUri;
@@ -793,7 +1362,26 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
     app.get('/api/file', async (req: Request, res: Response) => {
         const uri = req.query.uri as string;
+        const allowedProjectId = (req as any).device?.allowed_project_id;
         try {
+            if (allowedProjectId) {
+                const tree = await getCachedProjectsTree();
+                const project = tree.find((p: any) => 
+                    p.id === allowedProjectId || 
+                    p.name === allowedProjectId ||
+                    p.projectName === allowedProjectId
+                );
+                if (!project) {
+                    res.status(403).json({ error: 'Access denied' });
+                    return;
+                }
+                const allowedPath = decodeURIComponent(project.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                const reqPath = decodeURIComponent(uri || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                if (!reqPath.startsWith(allowedPath)) {
+                    res.status(403).json({ error: 'Access denied: Out of project scope' });
+                    return;
+                }
+            }
             const data = await callRPC('ReadFile', { uri });
             res.json(data);
         } catch (err: any) {
@@ -1121,6 +1709,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             const device = verifyToken(token);
                             if (device) {
                                 (ws as any).authenticated = true;
+                                (ws as any).device = device;
                                 ws.send(JSON.stringify({ type: 'AUTH_SUCCESS' }));
                                 return;
                             }
@@ -1135,6 +1724,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     return;
                 }
                 // --- END AUTH CHECK ---
+
+                // --- PROJECT ISOLATION CHECK ---
+                const isAllowed = await checkDeviceProjectAccess(msg, (ws as any).device);
+                if (!isAllowed) {
+                    ws.send(JSON.stringify({ type: 'ERROR', error: 'Access denied: You are not authorized to access this project or conversation' }));
+                    return;
+                }
+                // --- END PROJECT ISOLATION CHECK ---
 
                 if (msg.type === 'SUBSCRIBE_STATS') {
                     (ws as any).subscribedToStats = true;
@@ -1248,11 +1845,27 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 } else if (msg.type === 'LIST_CONVERSATIONS_V2') {
                     try {
                         const data = await callRPC('GetAllCascadeTrajectories');
-                        const tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
+                        let tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
+                        const allowedProjectId = (ws as any).device?.allowed_project_id;
+                        if (allowedProjectId) {
+                            tree = tree.filter((p: any) => 
+                                p.id === allowedProjectId || 
+                                p.name === allowedProjectId ||
+                                p.projectName === allowedProjectId
+                            );
+                        }
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                     } catch (err) {
                         try {
-                            const tree = await getProjectsTree();
+                            let tree = await getProjectsTree();
+                            const allowedProjectId = (ws as any).device?.allowed_project_id;
+                            if (allowedProjectId) {
+                                tree = tree.filter((p: any) => 
+                                    p.id === allowedProjectId || 
+                                    p.name === allowedProjectId ||
+                                    p.projectName === allowedProjectId
+                                );
+                            }
                             ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                         } catch (fallbackErr) {
                             console.error('[WebSocket] Error in LIST_CONVERSATIONS_V2 fallback:', fallbackErr);
@@ -1308,7 +1921,15 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     }
                 } else if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
-                        const data = await getProjectsTree();
+                        let data = await getProjectsTree();
+                        const allowedProjectId = (ws as any).device?.allowed_project_id;
+                        if (allowedProjectId) {
+                            data = data.filter((p: any) => 
+                                p.id === allowedProjectId || 
+                                p.name === allowedProjectId ||
+                                p.projectName === allowedProjectId
+                            );
+                        }
                         console.log("Sending CONVERSATIONS_LIST with length:", data ? data.length : "null");
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data }));
                     } catch (err) {

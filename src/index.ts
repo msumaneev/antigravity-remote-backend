@@ -43,6 +43,9 @@ initDiscovery(); // Discover Language Server at startup (sync, one-time)
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+wss.on('error', (err: any) => {
+    console.error('[WebSocketServer] Error:', err.message);
+});
 
 // CORS: allow only localhost and private network ranges
 app.use(cors({

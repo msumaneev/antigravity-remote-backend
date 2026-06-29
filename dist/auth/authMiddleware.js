@@ -20,6 +20,14 @@ function isPublicPath(path) {
  * Expects: Authorization: Bearer <jwt>
  */
 function authMiddleware(req, res, next) {
+    // Allow local requests from localhost without token
+    const ip = req.ip || req.socket.remoteAddress || '';
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.endsWith('127.0.0.1');
+    if (isLocal) {
+        req.device = { deviceId: 'local-admin', deviceName: 'Local Admin', allowed_project_id: null };
+        next();
+        return;
+    }
     // Allow public endpoints
     if (isPublicPath(req.path)) {
         next();

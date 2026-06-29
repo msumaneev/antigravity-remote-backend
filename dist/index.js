@@ -48,6 +48,9 @@ if (!SERVER_ID) {
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 const wss = new ws_1.WebSocketServer({ server });
+wss.on('error', (err) => {
+    console.error('[WebSocketServer] Error:', err.message);
+});
 // CORS: allow only localhost and private network ranges
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
