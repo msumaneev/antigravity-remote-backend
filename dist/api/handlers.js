@@ -397,6 +397,22 @@ function transformTrajectoriesToProjectTree(summaries) {
     });
 }
 const multer_1 = __importDefault(require("multer"));
+async function filterProjectsTreeForDevice(tree, device) {
+    if (!device)
+        return tree;
+    const allowedProjectId = device.allowed_project_id;
+    if (!allowedProjectId)
+        return tree;
+    const configTree = await getCachedProjectsTree();
+    const configProj = configTree.find((p) => p.id === allowedProjectId);
+    const allowedNames = [allowedProjectId];
+    if (configProj)
+        allowedNames.push(configProj.name);
+    const res = tree.filter((p) => allowedNames.includes(p.id) ||
+        allowedNames.includes(p.name) ||
+        allowedNames.includes(p.projectName));
+    return res;
+}
 // Configure multer to save files in a temporary directory or directly to the target conversation if possible.
 // We'll use memory storage and write it manually to the right place so we can use conversationId.
 const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
@@ -1019,22 +1035,12 @@ function setupRoutes(app, wss) {
         try {
             const data = await (0, rpc_1.callRPC)('GetAllCascadeTrajectories');
             let tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
-            const allowedProjectId = req.device?.allowed_project_id;
-            if (allowedProjectId) {
-                tree = tree.filter((p) => p.id === allowedProjectId ||
-                    p.name === allowedProjectId ||
-                    p.projectName === allowedProjectId);
-            }
+            tree = await filterProjectsTreeForDevice(tree, req.device);
             res.json(tree);
         }
         catch (err) {
             let tree = await getCachedProjectsTree();
-            const allowedProjectId = req.device?.allowed_project_id;
-            if (allowedProjectId) {
-                tree = tree.filter((p) => p.id === allowedProjectId ||
-                    p.name === allowedProjectId ||
-                    p.projectName === allowedProjectId);
-            }
+            tree = await filterProjectsTreeForDevice(tree, req.device);
             res.json(tree);
         }
     });
@@ -1513,7 +1519,8 @@ function setupRoutes(app, wss) {
     // REST: Get available projects
     app.get('/api/projects', async (req, res) => {
         try {
-            const projects = await getCachedProjectsTree();
+            let projects = await getCachedProjectsTree();
+            projects = await filterProjectsTreeForDevice(projects, req.device);
             res.json(projects);
         }
         catch (error) {
@@ -1628,7 +1635,8 @@ function setupRoutes(app, wss) {
                 // Allow some actions without authentication
                 if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
-                        const tree = await getProjectsTree();
+                        let tree = await getProjectsTree();
+                        tree = await filterProjectsTreeForDevice(tree, ws.device);
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                     }
                     catch (err) {
@@ -1802,23 +1810,13 @@ function setupRoutes(app, wss) {
                     try {
                         const data = await (0, rpc_1.callRPC)('GetAllCascadeTrajectories');
                         let tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
-                        const allowedProjectId = ws.device?.allowed_project_id;
-                        if (allowedProjectId) {
-                            tree = tree.filter((p) => p.id === allowedProjectId ||
-                                p.name === allowedProjectId ||
-                                p.projectName === allowedProjectId);
-                        }
+                        tree = await filterProjectsTreeForDevice(tree, ws.device);
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                     }
                     catch (err) {
                         try {
                             let tree = await getProjectsTree();
-                            const allowedProjectId = ws.device?.allowed_project_id;
-                            if (allowedProjectId) {
-                                tree = tree.filter((p) => p.id === allowedProjectId ||
-                                    p.name === allowedProjectId ||
-                                    p.projectName === allowedProjectId);
-                            }
+                            tree = await filterProjectsTreeForDevice(tree, ws.device);
                             ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                         }
                         catch (fallbackErr) {
@@ -1888,12 +1886,7 @@ function setupRoutes(app, wss) {
                 else if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
                         let data = await getProjectsTree();
-                        const allowedProjectId = ws.device?.allowed_project_id;
-                        if (allowedProjectId) {
-                            data = data.filter((p) => p.id === allowedProjectId ||
-                                p.name === allowedProjectId ||
-                                p.projectName === allowedProjectId);
-                        }
+                        data = await filterProjectsTreeForDevice(data, ws.device);
                         console.log("Sending CONVERSATIONS_LIST with length:", data ? data.length : "null");
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data }));
                     }

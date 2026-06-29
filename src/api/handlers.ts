@@ -411,6 +411,24 @@ function transformTrajectoriesToProjectTree(summaries: Record<string, any>): any
 
 import multer from 'multer';
 
+async function filterProjectsTreeForDevice(tree: any[], device: any): Promise<any[]> {
+    if (!device) return tree;
+    const allowedProjectId = device.allowed_project_id;
+    if (!allowedProjectId) return tree;
+    
+    const configTree = await getCachedProjectsTree();
+    const configProj = configTree.find((p: any) => p.id === allowedProjectId);
+    const allowedNames = [allowedProjectId];
+    if (configProj) allowedNames.push(configProj.name);
+
+    const res = tree.filter((p: any) => 
+        allowedNames.includes(p.id) || 
+        allowedNames.includes(p.name) ||
+        allowedNames.includes(p.projectName)
+    );
+    return res;
+}
+
 // Configure multer to save files in a temporary directory or directly to the target conversation if possible.
 // We'll use memory storage and write it manually to the right place so we can use conversationId.
 const upload = multer({ storage: multer.memoryStorage() });
@@ -1049,25 +1067,11 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         try {
             const data = await callRPC('GetAllCascadeTrajectories');
             let tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
-            const allowedProjectId = (req as any).device?.allowed_project_id;
-            if (allowedProjectId) {
-                tree = tree.filter((p: any) => 
-                    p.id === allowedProjectId || 
-                    p.name === allowedProjectId ||
-                    p.projectName === allowedProjectId
-                );
-            }
+            tree = await filterProjectsTreeForDevice(tree, (req as any).device);
             res.json(tree);
         } catch (err) {
             let tree = await getCachedProjectsTree();
-            const allowedProjectId = (req as any).device?.allowed_project_id;
-            if (allowedProjectId) {
-                tree = tree.filter((p: any) => 
-                    p.id === allowedProjectId || 
-                    p.name === allowedProjectId ||
-                    p.projectName === allowedProjectId
-                );
-            }
+            tree = await filterProjectsTreeForDevice(tree, (req as any).device);
             res.json(tree);
         }
     });
@@ -1561,7 +1565,8 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
     // REST: Get available projects
     app.get('/api/projects', async (req: Request, res: Response) => {
         try {
-            const projects = await getCachedProjectsTree();
+            let projects = await getCachedProjectsTree();
+            projects = await filterProjectsTreeForDevice(projects, (req as any).device);
             res.json(projects);
         } catch (error) {
             res.status(500).json({ error: String(error) });
@@ -1683,7 +1688,8 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 // Allow some actions without authentication
                 if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
-                        const tree = await getProjectsTree();
+                        let tree = await getProjectsTree();
+                        tree = await filterProjectsTreeForDevice(tree, (ws as any).device);
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                     } catch (err) {
                         console.error('[WebSocket] Error in LIST_CONVERSATIONS:', err);
@@ -1846,26 +1852,12 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     try {
                         const data = await callRPC('GetAllCascadeTrajectories');
                         let tree = transformTrajectoriesToProjectTree(data.trajectorySummaries || {});
-                        const allowedProjectId = (ws as any).device?.allowed_project_id;
-                        if (allowedProjectId) {
-                            tree = tree.filter((p: any) => 
-                                p.id === allowedProjectId || 
-                                p.name === allowedProjectId ||
-                                p.projectName === allowedProjectId
-                            );
-                        }
+                        tree = await filterProjectsTreeForDevice(tree, (ws as any).device);
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                     } catch (err) {
                         try {
                             let tree = await getProjectsTree();
-                            const allowedProjectId = (ws as any).device?.allowed_project_id;
-                            if (allowedProjectId) {
-                                tree = tree.filter((p: any) => 
-                                    p.id === allowedProjectId || 
-                                    p.name === allowedProjectId ||
-                                    p.projectName === allowedProjectId
-                                );
-                            }
+                            tree = await filterProjectsTreeForDevice(tree, (ws as any).device);
                             ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data: tree }));
                         } catch (fallbackErr) {
                             console.error('[WebSocket] Error in LIST_CONVERSATIONS_V2 fallback:', fallbackErr);
@@ -1922,14 +1914,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 } else if (msg.type === 'LIST_CONVERSATIONS') {
                     try {
                         let data = await getProjectsTree();
-                        const allowedProjectId = (ws as any).device?.allowed_project_id;
-                        if (allowedProjectId) {
-                            data = data.filter((p: any) => 
-                                p.id === allowedProjectId || 
-                                p.name === allowedProjectId ||
-                                p.projectName === allowedProjectId
-                            );
-                        }
+                        data = await filterProjectsTreeForDevice(data, (ws as any).device);
                         console.log("Sending CONVERSATIONS_LIST with length:", data ? data.length : "null");
                         ws.send(JSON.stringify({ type: 'CONVERSATIONS_LIST', data }));
                     } catch (err) {

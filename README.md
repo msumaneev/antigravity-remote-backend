@@ -30,6 +30,12 @@ The backend connects directly to the Antigravity Language Server (LS) exactly li
 - **Instant History Sync** — Subscribes to `agent.cascadeStream` to sync the complete conversation natively in real-time, completely bypassing slow transcript parsing.
 - **WebSocket Powered** — Maintains a persistent, lag-free connection between your PC and the mobile app.
 
+### 🖥️ Admin Dashboard & Project Access Control
+The backend includes a Web Admin Dashboard for managing connected devices and restricting access permissions:
+- **Device Management** — View all paired devices, pairing times, and their last seen status. Revoke device access with one click.
+- **Project Isolation & Restrictions** — Assign specific devices to restricted projects (e.g., restricting a device to `"GB Project"`). The restricted device will only see that project's folder, file browser, and trajectories.
+- **Access Control & Sandboxing** — Restricted devices are automatically blocked from executing critical terminal commands (`KILL`, `START_AGENT`, or sending unassociated inputs) to ensure enterprise-grade security.
+
 ### 📱 Mobile Integration
 - **Image Uploads** — Supports sending images from your phone's gallery directly to the Antigravity cascade.
 - **Remote Access** — Expose this server via Tailscale to control your local AI from anywhere in the world.
