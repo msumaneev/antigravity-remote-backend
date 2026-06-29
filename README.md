@@ -31,10 +31,16 @@ The backend connects directly to the Antigravity Language Server (LS) exactly li
 - **WebSocket Powered** — Maintains a persistent, lag-free connection between your PC and the mobile app.
 
 ### 🖥️ Admin Dashboard & Project Access Control
-The backend includes a Web Admin Dashboard for managing connected devices and restricting access permissions:
+The backend includes a Web Admin Dashboard (accessible at `/admin`, restricted to `localhost` for security) for managing connected devices and restricting access permissions:
 - **Device Management** — View all paired devices, pairing times, and their last seen status. Revoke device access with one click.
-- **Project Isolation & Restrictions** — Assign specific devices to restricted projects (e.g., restricting a device to `"GB Project"`). The restricted device will only see that project's folder, file browser, and trajectories.
-- **Access Control & Sandboxing** — Restricted devices are automatically blocked from executing critical terminal commands (`KILL`, `START_AGENT`, or sending unassociated inputs) to ensure enterprise-grade security.
+- **Project Isolation & Restrictions** — Assign specific devices or web clients to restricted projects (e.g., restricting a device to `"GB Project"`). The restricted device will only see that project's folder, file browser, and trajectories.
+- **Access Control & Sandboxing** — Restricted devices/clients are automatically blocked from executing critical terminal commands (`KILL`, `START_AGENT`, or sending unassociated inputs) to ensure enterprise-grade security.
+
+### 💬 Web Chat Client (Desktop Interface)
+For desktop users (such as accountants or managers) who prefer working on a PC rather than a mobile app, the server exposes a beautiful, fully functional Web Chat Client (accessible at `/chat`):
+- **Token-Based Security** — Users authorize securely using a permanent JWT token generated via the Admin Console. No numeric code matching is needed. The token is saved in `localStorage` for convenience.
+- **Project Limitation Compliance** — If a token is restricted to a specific project, the Web Chat Client dynamically isolates the user to that project's context, folder contents, and trajectories.
+- **Token Quota Monitoring** — A dedicated token status panel directly in the sidebar allows users to track their remaining token quotas in real-time.
 
 ### 📱 Mobile Integration
 - **Image Uploads** — Supports sending images from your phone's gallery directly to the Antigravity cascade.

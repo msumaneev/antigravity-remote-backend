@@ -91,31 +91,30 @@ function getChatHtml(pairingToken) {
             line-height: 1.5;
         }
 
-        .code-input-container {
-            display: flex;
-            justify-content: center;
-            gap: 0.75rem;
+        .token-input-container {
+            width: 100%;
             margin-bottom: 2rem;
         }
 
-        .code-char {
-            width: 50px;
-            height: 60px;
+        .token-textarea {
+            width: 100%;
+            height: 100px;
             background: rgba(15, 23, 42, 0.6);
             border: 2px solid var(--border-color);
             border-radius: 12px;
-            font-size: 1.8rem;
-            font-weight: 700;
+            font-size: 0.9rem;
             color: white;
-            text-align: center;
+            padding: 0.75rem;
+            font-family: monospace;
             outline: none;
             transition: all 0.2s;
+            resize: none;
+            box-sizing: border-box;
         }
 
-        .code-char:focus {
+        .token-textarea:focus {
             border-color: var(--accent-color);
             box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
-            transform: scale(1.05);
         }
 
         .btn-pair {
@@ -211,7 +210,7 @@ function getChatHtml(pairingToken) {
             background-color: rgba(239, 68, 68, 0.1);
         }
 
-        /* Quota Section */
+        /* --- QUOTA SECTION --- */
         .quota-panel {
             padding: 1rem 1.5rem;
             border-bottom: 1px solid var(--border-color);

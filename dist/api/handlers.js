@@ -856,6 +856,19 @@ function setupRoutes(app, wss) {
                                 <!-- For test parsing -->
                                 <div style="display:none">${token}</div>
                             </div>
+
+                            <!-- Web Client Token Generation -->
+                            <div style="margin-top: 2rem; width: 100%; border-top: 1px solid var(--card-border); padding-top: 1.5rem; text-align: left;">
+                                <h3 style="font-size: 1.1rem; margin-bottom: 0.75rem; color: #a5b4fc;">Доступ для бухгалтера (Web Chat)</h3>
+                                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                    Сгенерируйте постоянный токен доступа, скопируйте его и отправьте бухгалтеру. После этого вы сможете ограничить его доступ к конкретному проекту в списке справа.
+                                </p>
+                                <button class="btn-primary" style="width: 100%; margin-bottom: 1rem;" onclick="generateWebToken()">Сгенерировать токен</button>
+                                <div id="web-token-container" style="display: none;">
+                                    <textarea id="web-token-input" readonly style="width: 100%; height: 80px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--card-border); border-radius: 8px; color: var(--text-primary); padding: 0.5rem; font-family: monospace; font-size: 0.8rem; resize: none; margin-bottom: 0.5rem; outline: none;"></textarea>
+                                    <button class="btn-primary" style="width: 100%; background: #10b981; margin-bottom: 1rem;" onclick="copyWebToken()">Копировать токен</button>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Right Panel: Device Management -->
@@ -877,6 +890,37 @@ function setupRoutes(app, wss) {
                         async function init() {
                             await loadProjects();
                             await loadDevices();
+                        }
+
+                        async function generateWebToken() {
+                            try {
+                                const name = prompt('Введите имя устройства (например, Бухгалтер):', 'Бухгалтер');
+                                if (name === null) return;
+                                
+                                const res = await fetch('/api/devices/web-client', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ name })
+                                });
+                                const result = await res.json();
+                                if (result.success && result.token) {
+                                    document.getElementById('web-token-input').value = result.token;
+                                    document.getElementById('web-token-container').style.display = 'block';
+                                    await loadDevices();
+                                } else {
+                                    alert('Не удалось сгенерировать токен: ' + (result.error || 'Неизвестная ошибка'));
+                                }
+                            } catch (e) {
+                                alert('Ошибка соединения с сервером');
+                            }
+                        }
+
+                        function copyWebToken() {
+                            const input = document.getElementById('web-token-input');
+                            input.select();
+                            input.setSelectionRange(0, 99999);
+                            navigator.clipboard.writeText(input.value);
+                            alert('Токен скопирован в буфер обмена!');
                         }
 
                         async function loadProjects() {
@@ -1105,6 +1149,22 @@ function setupRoutes(app, wss) {
         try {
             const token = (0, tokens_1.generatePairingToken)();
             res.json({ token });
+        }
+        catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.post('/api/devices/web-client', (req, res) => {
+        const ip = req.ip || req.socket.remoteAddress || '';
+        const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.endsWith('127.0.0.1');
+        if (!isLocal) {
+            res.status(403).json({ error: 'Forbidden: Admin operations are only allowed from localhost' });
+            return;
+        }
+        try {
+            const { name } = req.body;
+            const { token, deviceId } = (0, auth_1.pairDevice)(name || 'Web Chat Client');
+            res.json({ success: true, token, deviceId });
         }
         catch (err) {
             res.status(500).json({ error: err.message });
