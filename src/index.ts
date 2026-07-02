@@ -179,6 +179,9 @@ function startServer(port: number) {
             
             // Start mDNS discovery
             startDiscovery(port, SERVER_ID as string, SERVER_VERSION);
+            // [NEW] Сохраняем фактически занятый порт в process.env, 
+            // чтобы роутеры API могли сгенерировать правильный QR-код.
+            process.env.PORT = port.toString();
 
             console.log(`=================================================`);
             console.log(`🚀 Antigravity Remote Backend is RUNNING`);
