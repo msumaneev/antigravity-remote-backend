@@ -108,8 +108,8 @@ function extractTitle(dir: string, id: string): string {
             for (const mf of msgFiles) {
                 const msgData = JSON.parse(fs.readFileSync(path.join(messagesDir, mf), 'utf-8'));
                 const content = msgData.content || '';
-                // Extract text from [Отправлено с телефона]: ... or <USER_REQUEST>
-                const phoneMatch = content.match(/\[Отправлено с телефона\]:\s*(.*?)(?:\\n|$)/s);
+                // Extract text from [Sent from phone]: ... or <USER_REQUEST>
+                const phoneMatch = content.match(/\[(?:Sent from phone|\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0441 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430)\]:\s*(.*?)(?:\\n|$)/s);
                 if (phoneMatch) {
                     let title = phoneMatch[1].trim();
                     if (title.length > 50) title = title.substring(0, 50) + '...';
@@ -178,8 +178,10 @@ async function getProjectsTree() {
             try {
                 const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
                 const data = JSON.parse(content);
-                if (data.id && data.name && data.projectResources?.resources?.[0]?.folderUri) {
-                    const uri = data.projectResources.resources[0].folderUri;
+                const res0 = data.projectResources?.resources?.[0];
+                const folderUri = res0?.folderUri || res0?.gitFolder?.folderUri;
+                if (data.id && data.name && folderUri) {
+                    const uri = folderUri;
                     let pPath = uri.replace('file:///', '');
                     pPath = decodeURIComponent(pPath);
                     projectMap[data.id] = { name: data.name, path: pPath };
@@ -218,7 +220,7 @@ async function getProjectsTree() {
                                 if (titleLen < 128) {
                                     tIdx++;
                                     const title = buf.toString('utf8', tIdx, tIdx + titleLen);
-                                    if (/^[A-Za-zА-Яа-я0-9]/.test(title)) {
+                                    if (/^[A-Za-z\u0410-\u042f\u0430-\u044f0-9]/.test(title)) {
                                         summariesMap[uuid] = title;
                                     }
                                 }
@@ -580,17 +582,17 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
                     <style>
                         :root {
-                            --bg-color: #0f172a;
-                            --card-bg: rgba(30, 41, 59, 0.7);
+                            --bg-color: #05070c;
+                            --card-bg: rgba(10, 15, 30, 0.7);
                             --card-border: rgba(255, 255, 255, 0.08);
-                            --text-primary: #f8fafc;
+                            --text-primary: #f1f5f9;
                             --text-secondary: #94a3b8;
-                            --accent-color: #6366f1;
-                            --accent-hover: #4f46e5;
+                            --accent-color: #f97316;
+                            --accent-hover: #ea580c;
                             --danger-color: #ef4444;
                             --danger-hover: #dc2626;
                             --success-color: #10b981;
-                            --glass-blur: blur(12px);
+                            --glass-blur: blur(20px);
                         }
 
                         * {
@@ -609,8 +611,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             align-items: center;
                             padding: 2rem 1rem;
                             background-image: 
-                                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
-                                radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.1) 0%, transparent 40%);
+                                radial-gradient(circle at top, rgba(249, 115, 22, 0.08) 0%, transparent 60%),
+                                linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+                                linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+                            background-size: 100% 100%, 50px 50px, 50px 50px;
                             background-attachment: fixed;
                         }
 
@@ -623,7 +627,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         header h1 {
                             font-size: 2.5rem;
                             font-weight: 800;
-                            background: linear-gradient(135deg, #a5b4fc 0%, #6366f1 50%, #34d399 100%);
+                            background: linear-gradient(135deg, #ff7e5f 0%, #f97316 50%, #10b981 100%);
                             -webkit-background-clip: text;
                             -webkit-text-fill-color: transparent;
                             margin-bottom: 0.5rem;
@@ -672,7 +676,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             display: flex;
                             align-items: center;
                             gap: 0.5rem;
-                            color: #a5b4fc;
+                            color: #f97316;
                         }
 
                         .qr-section {
@@ -686,7 +690,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             background: white;
                             padding: 1rem;
                             border-radius: 20px;
-                            box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.3);
+                            box-shadow: 0 10px 15px -3px rgba(249, 115, 22, 0.3);
                             margin-bottom: 1.5rem;
                             transition: transform 0.3s ease;
                         }
@@ -724,7 +728,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         }
 
                         .device-card:hover {
-                            border-color: rgba(99, 102, 241, 0.3);
+                            border-color: rgba(249, 115, 22, 0.3);
                             background: rgba(15, 23, 42, 0.6);
                         }
 
@@ -862,7 +866,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 <body>
                     <header>
                         <h1>Antigravity Remote Console</h1>
-                        <p>Управление сопряженными устройствами и изоляцией проектов</p>
+                        <p>Manage paired devices and project isolation</p>
                     </header>
 
                     <div class="container">
@@ -870,28 +874,28 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         <div class="panel qr-section">
                             <h2>
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17h.01M19 17h.01M5 7h.01M19 7h.01M7 12h10M12 7v10"/></svg>
-                                Сопряжение
+                                Pairing
                             </h2>
                             <div class="qr-container">
                                 <img src="${qrDataUrl}" alt="Pairing QR Code" />
                             </div>
                             <div class="qr-info">
-                                <p>Откройте приложение <strong>Antigravity Remote</strong> на смартфоне и отсканируйте этот QR-код для подключения.</p>
-                                <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Токен действителен 5 минут.</p>
+                                <p>Open the <strong>Antigravity Remote</strong> app on your smartphone and scan this QR code to connect.</p>
+                                <p style="margin-top: 0.5rem; font-size: 0.85rem; opacity: 0.7;">Token is valid for 5 minutes.</p>
                                 <!-- For test parsing -->
                                 <div style="display:none">${token}</div>
                             </div>
 
                             <!-- Web Client Token Generation -->
                             <div style="margin-top: 2rem; width: 100%; border-top: 1px solid var(--card-border); padding-top: 1.5rem; text-align: left;">
-                                <h3 style="font-size: 1.1rem; margin-bottom: 0.75rem; color: #a5b4fc;">Доступ для бухгалтера (Web Chat)</h3>
+                                <h3 style="font-size: 1.1rem; margin-bottom: 0.75rem; color: #f97316;">Web Chat Access</h3>
                                 <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-                                    Сгенерируйте постоянный токен доступа, скопируйте его и отправьте бухгалтеру. После этого вы сможете ограничить его доступ к конкретному проекту в списке справа.
+                                    Generate a permanent access token, copy it, and share it with the accountant/user. You can restrict their access to specific projects in the list on the right.
                                 </p>
-                                <button class="btn-primary" style="width: 100%; margin-bottom: 1rem;" onclick="generateWebToken()">Сгенерировать токен</button>
+                                <button class="btn-primary" style="width: 100%; margin-bottom: 1rem;" onclick="generateWebToken()">Create Token</button>
                                 <div id="web-token-container" style="display: none;">
                                     <textarea id="web-token-input" readonly style="width: 100%; height: 80px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--card-border); border-radius: 8px; color: var(--text-primary); padding: 0.5rem; font-family: monospace; font-size: 0.8rem; resize: none; margin-bottom: 0.5rem; outline: none;"></textarea>
-                                    <button class="btn-primary" style="width: 100%; background: #10b981; margin-bottom: 1rem;" onclick="copyWebToken()">Копировать токен</button>
+                                    <button class="btn-primary" style="width: 100%; background: #10b981; margin-bottom: 1rem;" onclick="copyWebToken()">Copy Token</button>
                                 </div>
                             </div>
                         </div>
@@ -900,10 +904,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                         <div class="panel">
                             <h2>
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-                                Устройства в сети
+                                Connected Devices
                             </h2>
                             <div id="device-list">
-                                <div class="empty-state">Загрузка списка устройств...</div>
+                                <div class="empty-state">Loading devices...</div>
                             </div>
                         </div>
                     </div>
@@ -919,7 +923,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
                         async function generateWebToken() {
                             try {
-                                const name = prompt('Введите имя устройства (например, Бухгалтер):', 'Бухгалтер');
+                                const name = prompt('Enter device name (e.g., Accountant):', 'Accountant');
                                 if (name === null) return;
                                 
                                 const res = await fetch('/api/devices/web-client', {
@@ -933,10 +937,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                     document.getElementById('web-token-container').style.display = 'block';
                                     await loadDevices();
                                 } else {
-                                    alert('Не удалось сгенерировать токен: ' + (result.error || 'Неизвестная ошибка'));
+                                    alert('Failed to generate token: ' + (result.error || 'Unknown error'));
                                 }
                             } catch (e) {
-                                alert('Ошибка соединения с сервером');
+                                alert('Server connection error');
                             }
                         }
 
@@ -945,7 +949,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             input.select();
                             input.setSelectionRange(0, 99999);
                             navigator.clipboard.writeText(input.value);
-                            alert('Токен скопирован в буфер обмена!');
+                            alert('Token copied to clipboard!');
                         }
 
                         async function loadProjects() {
@@ -964,7 +968,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 renderDevices();
                             } catch (e) {
                                 document.getElementById('device-list').innerHTML = 
-                                    '<div class="empty-state">Ошибка загрузки списка устройств</div>';
+                                    '<div class="empty-state">Failed to load device list</div>';
                             }
                         }
 
@@ -979,15 +983,15 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 if (result.success) {
                                     await loadDevices();
                                 } else {
-                                    alert('Не удалось обновить ограничения: ' + (result.error || 'Неизвестная ошибка'));
+                                    alert('Failed to update restrictions: ' + (result.error || 'Unknown error'));
                                 }
                             } catch (e) {
-                                alert('Ошибка соединения с сервером');
+                                alert('Server connection error');
                             }
                         }
 
                         async function deleteDevice(deviceId) {
-                            if (!confirm('Вы уверены, что хотите удалить это устройство?')) return;
+                            if (!confirm('Are you sure you want to delete this device?')) return;
                             try {
                                 const res = await fetch(\`/api/devices/\${deviceId}\`, {
                                     method: 'DELETE'
@@ -996,10 +1000,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 if (result.success) {
                                     await loadDevices();
                                 } else {
-                                    alert('Не удалось удалить устройство');
+                                    alert('Failed to delete device');
                                 }
                             } catch (e) {
-                                alert('Ошибка соединения с сервером');
+                                alert('Server connection error');
                             }
                         }
 
@@ -1009,7 +1013,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 listEl.innerHTML = \`
                                     <div class="empty-state">
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                                        <p>Нет подключенных устройств</p>
+                                        <p>No connected devices</p>
                                     </div>
                                 \`;
                                 return;
@@ -1017,14 +1021,14 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
                             listEl.innerHTML = devices.map(device => {
                                 const pairedDate = new Date(device.pairedAt).toLocaleString();
-                                const lastSeenDate = device.lastSeen ? new Date(device.lastSeen).toLocaleString() : 'Никогда';
+                                const lastSeenDate = device.lastSeen ? new Date(device.lastSeen).toLocaleString() : 'Never';
                                 
                                 const isRestricted = !!device.allowed_project_id;
                                 const badgeClass = isRestricted ? 'badge-restricted' : 'badge-active';
-                                const badgeText = isRestricted ? 'Ограничен' : 'Полный доступ';
+                                const badgeText = isRestricted ? 'Restricted' : 'Full Access';
 
                                 const projectOptions = [
-                                    '<option value="">-- Полный доступ (Без ограничений) --</option>',
+                                    '<option value="">-- Full Access (Unrestricted) --</option>',
                                     ...projects.map(p => {
                                         const selected = device.allowed_project_id === p.id || device.allowed_project_id === p.projectName ? 'selected' : '';
                                         return \`<option value="\${p.id || p.projectName}" \${selected}>\${p.projectName || p.name}</option>\`;
@@ -1038,8 +1042,8 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                                 <div class="device-name">\${escapeHtml(device.name)}</div>
                                                 <div class="device-meta">
                                                     <span>ID: \${device.id}</span>
-                                                    <span>Сопряжено: \${pairedDate}</span>
-                                                    <span>Активность: \${lastSeenDate}</span>
+                                                    <span>Paired: \${pairedDate}</span>
+                                                    <span>Last Active: \${lastSeenDate}</span>
                                                 </div>
                                             </div>
                                             <span class="badge \${badgeClass}">\${badgeText}</span>
@@ -1048,7 +1052,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                             <select onchange="restrictDevice('\${device.id}', this.value)">
                                                 \${projectOptions}
                                             </select>
-                                            <button class="btn-danger" onclick="deleteDevice('\${device.id}')">Удалить</button>
+                                            <button class="btn-danger" onclick="deleteDevice('\${device.id}')">Delete</button>
                                         </div>
                                     </div>
                                 \`;
@@ -2048,7 +2052,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                         const msgData = JSON.parse(fs.readFileSync(path.join(messagesDir, mf), 'utf-8'));
                                         // Extract user text from USER_REQUEST tags
                                         let userText = msgData.content || '';
-                                        const match = userText.match(/\[Отправлено с телефона\]:\s*(.*?)\\n/s);
+                                        const match = userText.match(/\[(?:Sent from phone|\u041e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u0441 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430)\]:\s*(.*?)\\n/s);
                                         if (match) userText = match[1].trim();
                                         else {
                                             const reqMatch = userText.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
@@ -2073,7 +2077,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                     type: 'PLANNER_RESPONSE',
                                     status: 'DONE',
                                     created_at: new Date().toISOString(),
-                                    content: '⏳ Сообщение отправлено. Ожидание запуска агента...',
+                                    content: '⏳ Message sent. Waiting for the agent to start...',
                                 });
                             }
                             ws.send(JSON.stringify({ type: 'TRANSCRIPT_DATA', data: pendingMsgs, offset: 0, hasMore: false, isPagination: false }));
