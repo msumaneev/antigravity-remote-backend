@@ -56,10 +56,10 @@ export async function sendMessage(
     }
 
     // Wrap in USER_REQUEST tags so the agent sees it as a user message
-    const content = `${settingsInjection}<USER_REQUEST>\n[Отправлено с телефона]: ${rawContent.trim()}\n</USER_REQUEST>`;
+    const content = `${settingsInjection}<USER_REQUEST>\n[Sent from phone]: ${rawContent.trim()}\n</USER_REQUEST>`;
 
     // Try AgentAPI first
-    const result = await sendViaAgentAPI(conversationId, content);
+    const result = await sendViaAgentAPI(conversationId, content, model);
     if (result.success) {
         return result;
     }
@@ -67,13 +67,17 @@ export async function sendMessage(
     console.log(`[Sender] AgentAPI failed (${result.error}), falling back to file-based approach`);
 
     // Fallback: write message file
+    if (conversationId.startsWith('START_NEW_AGENT_')) {
+        return { success: false, method: 'agentapi', error: result.error || 'Language Server is not running. Cannot start a new agent via fallback file method.' };
+    }
+    
     return sendViaFile(conversationId, content);
 }
 
 /**
  * Send via native AgentAPI CLI — this wakes the agent automatically.
  */
-async function sendViaAgentAPI(conversationId: string, content: string): Promise<SendResult> {
+async function sendViaAgentAPI(conversationId: string, content: string, model?: string): Promise<SendResult> {
     const discovery = discoverLanguageServer();
     if (!discovery) {
         return { success: false, method: 'agentapi', error: 'Language Server not found' };
@@ -110,9 +114,19 @@ async function sendViaAgentAPI(conversationId: string, content: string): Promise
                 ANTIGRAVITY_PROJECT_ID: projectId,
             };
 
-            execFile(discovery.agentApiPath, [
-                'agentapi', 'new-conversation', content
-            ], {
+            const args = ['agentapi', 'new-conversation'];
+            
+            // Default to pro if no model specified, it's 'default', or it's a Pro model
+            if (!model || model === 'default' || model.toLowerCase().includes('pro')) {
+                args.push('--model=pro');
+            } else if (model.toLowerCase().includes('lite')) {
+                args.push('--model=flash_lite');
+            } else {
+                args.push('--model=flash');
+            }
+            args.push(content);
+
+            execFile(discovery.agentApiPath, args, {
                 timeout: 30000,
                 encoding: 'utf8',
                 env,

@@ -1857,7 +1857,12 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             const result = await sendMessage(conversationId, msg.data, msg.model);
                             if (result.success) {
                                 if (result.newConvId) {
-                                    ws.send(JSON.stringify({ type: 'CHAT_CREATED', oldId: msg.conversationId, newId: result.newConvId }));
+                                    const payload = JSON.stringify({ type: 'CHAT_CREATED', oldId: msg.conversationId, newId: result.newConvId });
+                                    wss.clients.forEach(client => {
+                                        if (client.readyState === 1) { // 1 = OPEN
+                                            client.send(payload);
+                                        }
+                                    });
                                 }
                                 ws.send(JSON.stringify({
                                     type: 'EVENT',

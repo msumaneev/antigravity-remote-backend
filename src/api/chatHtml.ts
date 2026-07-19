@@ -319,7 +319,7 @@ export function getChatHtml(pairingToken: string): string {
         }
 
         .btn-new-chat:hover {
-            background: rgba(99, 102, 241, 0.15);
+            background: rgba(249, 115, 22, 0.15);
         }
 
         .chats-list {
@@ -469,7 +469,7 @@ export function getChatHtml(pairingToken: string): string {
             background: var(--accent-gradient);
             color: white;
             border-bottom-right-radius: 4px;
-            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.25);
+            box-shadow: 0 4px 15px rgba(249, 115, 22, 0.2);
         }
 
         .message-bubble.assistant .message-content {
@@ -595,6 +595,56 @@ export function getChatHtml(pairingToken: string): string {
 
         .btn-action.reject:hover {
             box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+        }
+
+
+        /* Stitch-like Alert/Tip Boxes */
+        .alert-box {
+            margin: 1.25rem 0;
+            padding: 1rem 1.25rem;
+            border-radius: 8px;
+            border-left: 4px solid var(--accent-color);
+            background: rgba(255, 255, 255, 0.02);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+        .alert-tip {
+            border-left-color: #10b981;
+            background: rgba(16, 185, 129, 0.04);
+        }
+        .alert-note {
+            border-left-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.04);
+        }
+        .alert-important {
+            border-left-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.04);
+        }
+        .alert-warning {
+            border-left-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.04);
+        }
+        .alert-caution {
+            border-left-color: #ef4444;
+            background: rgba(239, 68, 68, 0.04);
+        }
+        .alert-header {
+            font-weight: 700;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .alert-tip .alert-header { color: #10b981; }
+        .alert-note .alert-header { color: #3b82f6; }
+        .alert-important .alert-header { color: #8b5cf6; }
+        .alert-warning .alert-header { color: #f59e0b; }
+        .alert-caution .alert-header { color: #ef4444; }
+        .alert-content p {
+            margin: 0 !important;
         }
 
         /* Message Input Panel */
