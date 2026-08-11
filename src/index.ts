@@ -79,7 +79,11 @@ setInterval(() => {
         if (fs.existsSync(urlPath)) {
             const url = fs.readFileSync(urlPath, 'utf8').trim();
             if (url && url !== lastPublishedUrl && url.includes('trycloudflare.com')) {
-                publishToFirebase(url);
+                lastPublishedUrl = url;
+                console.log(`[Firebase] New URL detected: ${url}. Waiting 15 seconds for DNS propagation before publishing...`);
+                setTimeout(() => {
+                    publishToFirebase(url);
+                }, 15000);
             }
         }
     } catch (e) {}
@@ -248,30 +252,4 @@ function startServer(port: number) {
         });
 }
 
-function checkTailscaleAndStart() {
-    const tsIp = getTailscaleIp();
-    if (!tsIp) {
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-        
-        console.log('\n⚠️  Tailscale is NOT detected on your system.');
-        console.log('To connect to Antigravity Remote securely from anywhere, we highly recommend installing Tailscale.');
-        console.log('Download it from: https://tailscale.com/download');
-        
-        rl.question('\nWould you like to continue using your local network IP anyway? (y/n): ', (answer) => {
-            rl.close();
-            if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
-                startServer(initialPort);
-            } else {
-                console.log('Exiting...');
-                process.exit(0);
-            }
-        });
-    } else {
-        startServer(initialPort);
-    }
-}
-
-checkTailscaleAndStart();
+startServer(initialPort);

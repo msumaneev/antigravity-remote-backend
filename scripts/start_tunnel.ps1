@@ -12,6 +12,9 @@ if (-not (Test-Path $cloudflaredPath)) {
 
 Write-Host "Starting Cloudflare Quick Tunnel for localhost:8080..."
 $logPath = "$scriptDir\..\.cloudflare_log.txt"
+if (Test-Path $logPath) {
+    Remove-Item $logPath -Force
+}
 $process = Start-Process -FilePath $cloudflaredPath -ArgumentList "tunnel --url http://localhost:8080" -NoNewWindow -PassThru -RedirectStandardError $logPath
 
 $maxRetries = 20
