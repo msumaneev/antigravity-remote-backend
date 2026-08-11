@@ -1,6 +1,6 @@
 export function getChatHtml(pairingToken: string): string {
     return `<!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -754,8 +754,8 @@ export function getChatHtml(pairingToken: string): string {
     <!-- Pairing Screen -->
     <div id="pairing-screen">
         <div class="pairing-card">
-            <h2>Сопряжение Web Chat</h2>
-            <p>Введите 6-значный код сопряжения, отображаемый в Antigravity Remote Admin Console на компьютере.</p>
+            <h2>Web Chat Pairing</h2>
+            <p>Enter the 6-digit pairing code displayed in the Antigravity Remote Admin Console on your computer.</p>
             <div class="code-input-container">
                 <input type="text" maxlength="1" class="code-char" id="c1" autofocus>
                 <input type="text" maxlength="1" class="code-char" id="c2">
@@ -764,8 +764,8 @@ export function getChatHtml(pairingToken: string): string {
                 <input type="text" maxlength="1" class="code-char" id="c5">
                 <input type="text" maxlength="1" class="code-char" id="c6">
             </div>
-            <button class="btn-pair" id="btn-submit-pair">Подключиться</button>
-            <div class="pairing-error" id="pairing-error">Неверный код сопряжения. Пожалуйста, попробуйте еще раз.</div>
+            <button class="btn-pair" id="btn-submit-pair">Connect</button>
+            <div class="pairing-error" id="pairing-error">Invalid pairing code. Please try again.</div>
         </div>
     </div>
 
@@ -778,14 +778,14 @@ export function getChatHtml(pairingToken: string): string {
                     <div class="brand-logo">A</div>
                     <div class="brand-title">Antigravity Chat</div>
                 </div>
-                <button class="btn-logout" id="btn-logout" title="Выйти">
+                <button class="btn-logout" id="btn-logout" title="Log out">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
                 </button>
             </div>
 
             <!-- Quota Remaining -->
             <div class="quota-panel" id="quota-panel" style="display:none">
-                <div class="quota-header">Остаток Квоты</div>
+                <div class="quota-header">Quota Remaining</div>
                 <div id="quota-list"></div>
             </div>
 
@@ -800,12 +800,12 @@ export function getChatHtml(pairingToken: string): string {
             <div id="active-chat-view" style="display: none; height: 100%; flex-direction: column;">
                 <div class="chat-header">
                     <div class="chat-header-info">
-                        <h3 id="active-chat-title">Название чата</h3>
-                        <p id="active-chat-project">Проект: ...</p>
+                        <h3 id="active-chat-title">Chat Name</h3>
+                        <p id="active-chat-project">Project: ...</p>
                     </div>
                     <div class="chat-status-badge">
                         <div class="status-dot" id="agent-status-dot"></div>
-                        <span id="agent-status-text">Инициализация</span>
+                        <span id="agent-status-text">Initialization</span>
                     </div>
                 </div>
 
@@ -815,7 +815,7 @@ export function getChatHtml(pairingToken: string): string {
                 <!-- Input -->
                 <div class="input-panel">
                     <div class="input-box">
-                        <textarea id="chat-input" placeholder="Введите ваш запрос..." rows="1"></textarea>
+                        <textarea id="chat-input" placeholder="Enter your prompt..." rows="1"></textarea>
                         <button class="btn-send" id="btn-send">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                         </button>
@@ -826,8 +826,8 @@ export function getChatHtml(pairingToken: string): string {
             <!-- Empty Chat state -->
             <div class="empty-chat-state" id="empty-chat-state">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                <h3>Добро пожаловать в Antigravity</h3>
-                <p>Выберите диалог в левой панели или создайте новый чат для вашего проекта.</p>
+                <h3>Welcome to Antigravity</h3>
+                <p>Select a conversation in the left panel or create a new chat for your project.</p>
             </div>
         </div>
     </div>
@@ -891,7 +891,7 @@ export function getChatHtml(pairingToken: string): string {
             codeInputs.forEach(i => code += i.value.trim());
             
             if (code.length !== 6) {
-                showError('Пожалуйста, введите все 6 цифр кода');
+                showError('Please enter all 6 digits of the code');
                 return;
             }
 
@@ -912,10 +912,10 @@ export function getChatHtml(pairingToken: string): string {
                     document.getElementById('app-layout').style.display = 'flex';
                     connectWebSocket();
                 } else {
-                    showError(data.error || 'Неверный код сопряжения.');
+                    showError(data.error || 'Invalid pairing code.');
                 }
             } catch(e) {
-                showError('Ошибка сети: не удалось соединиться с сервером.');
+                showError('Network error: failed to connect to the server.');
             }
         }
 
@@ -927,7 +927,7 @@ export function getChatHtml(pairingToken: string): string {
 
         // Logout
         document.getElementById('btn-logout').addEventListener('click', () => {
-            if (confirm('Вы уверены, что хотите отключить этот браузер?')) {
+            if (confirm('Are you sure you want to disconnect this browser?')) {
                 localStorage.removeItem('antigravity_token');
                 window.location.reload();
             }
@@ -1001,7 +1001,7 @@ export function getChatHtml(pairingToken: string): string {
                     console.log('[WS Event]:', msg.data);
                     break;
                 case 'ERROR':
-                    alert('Ошибка сервера: ' + msg.error);
+                    alert('Server error: ' + msg.error);
                     break;
             }
         }
@@ -1010,7 +1010,7 @@ export function getChatHtml(pairingToken: string): string {
         function renderProjectsTree(tree) {
             const container = document.getElementById('projects-list');
             if (!tree || tree.length === 0) {
-                container.innerHTML = '<div style="color:var(--text-secondary); text-align:center; padding: 2rem;">Нет доступных проектов</div>';
+                container.innerHTML = '<div style="color:var(--text-secondary); text-align:center; padding: 2rem;">No available projects</div>';
                 return;
             }
 
@@ -1036,7 +1036,7 @@ export function getChatHtml(pairingToken: string): string {
                                 <span>📁</span>
                                 <span>\${projectName}</span>
                             </div>
-                            <button class="btn-new-chat" onclick="createNewChat('\${projectName}', '\${projectPath}')" title="Создать чат">+</button>
+                            <button class="btn-new-chat" onclick="createNewChat('\${projectName}', '\${projectPath}')" title="Create chat">+</button>
                         </div>
                         <div class="chats-list">
                             \${chatItemsHtml}
@@ -1093,8 +1093,8 @@ export function getChatHtml(pairingToken: string): string {
             const view = document.getElementById('active-chat-view');
             view.style.display = 'flex';
 
-            document.getElementById('active-chat-title').textContent = 'Диалог: ' + convId.substring(0, 8);
-            document.getElementById('active-chat-project').textContent = 'Проект: ' + projectName;
+            document.getElementById('active-chat-title').textContent = 'Conversation: ' + convId.substring(0, 8);
+            document.getElementById('active-chat-project').textContent = 'Project: ' + projectName;
             
             updateAgentStatus('IDLE');
 
@@ -1120,18 +1120,18 @@ export function getChatHtml(pairingToken: string): string {
             const view = document.getElementById('active-chat-view');
             view.style.display = 'flex';
 
-            document.getElementById('active-chat-title').textContent = 'Новый чат';
-            document.getElementById('active-chat-project').textContent = 'Проект: ' + projectName;
+            document.getElementById('active-chat-title').textContent = 'New Chat';
+            document.getElementById('active-chat-project').textContent = 'Project: ' + projectName;
             
             const container = document.getElementById('messages-container');
-            container.innerHTML = '<div style="color:var(--text-secondary); text-align:center; padding: 2rem;">Напишите первое сообщение, чтобы запустить ассистента.</div>';
+            container.innerHTML = '<div style="color:var(--text-secondary); text-align:center; padding: 2rem;">Write your first message to start the assistant.</div>';
 
             updateAgentStatus('IDLE');
         }
 
         async function loadChatHistory(convId) {
             const container = document.getElementById('messages-container');
-            container.innerHTML = '<div style="color:var(--text-secondary); text-align:center; padding: 2rem;">Загрузка истории сообщений...</div>';
+            container.innerHTML = '<div style="color:var(--text-secondary); text-align:center; padding: 2rem;">Loading message history...</div>';
             
             try {
                 const res = await fetch(\`/api/history?conversationId=\${convId}&token=\${jwtToken}\`);
@@ -1148,7 +1148,7 @@ export function getChatHtml(pairingToken: string): string {
                             appendMessage(
                                 isUser ? 'user' : 'assistant',
                                 cleanUserMessage(step.content),
-                                isUser ? 'Вы' : 'Ассистент'
+                                isUser ? 'You' : 'Assistant'
                             );
                         }
                     });
@@ -1157,15 +1157,15 @@ export function getChatHtml(pairingToken: string): string {
                     container.scrollTop = container.scrollHeight;
                 }
             } catch(e) {
-                container.innerHTML = '<div style="color:#ef4444; text-align:center; padding: 2rem;">Не удалось загрузить историю диалога.</div>';
+                container.innerHTML = '<div style="color:#ef4444; text-align:center; padding: 2rem;">Failed to load conversation history.</div>';
             }
         }
 
-        // Helper to strip metadata/tags from user messages (like [Отправлено с телефона])
+        // Helper to strip metadata/tags from user messages (like [Sent from phone])
         function cleanUserMessage(text) {
             let cleaned = text.replace(/<USER_SETTINGS_CHANGE>[\\s\\S]*?<\\/USER_SETTINGS_CHANGE>/g, '');
             cleaned = cleaned.replace(/<USER_REQUEST>/g, '').replace(/<\/USER_REQUEST>/g, '');
-            cleaned = cleaned.replace(/\\[Отправлено с телефона\\]:/g, '');
+            cleaned = cleaned.replace(/\\[Sent from phone\\]:/g, '');
             return cleaned.trim();
         }
 
@@ -1223,11 +1223,11 @@ export function getChatHtml(pairingToken: string): string {
 
             if (status === 'THINKING') {
                 dot.className = 'status-dot active';
-                text.textContent = 'Ассистент думает...';
+                text.textContent = 'Assistant is thinking...';
                 isGenerating = true;
             } else {
                 dot.className = 'status-dot';
-                text.textContent = 'Готов';
+                text.textContent = 'Ready';
                 isGenerating = false;
             }
         }
@@ -1245,22 +1245,22 @@ export function getChatHtml(pairingToken: string): string {
 
             const title = document.createElement('div');
             title.className = 'interaction-title';
-            title.innerHTML = '⚠️ Требуется подтверждение действия';
+            title.innerHTML = '⚠️ Action Confirmation Required';
 
             const desc = document.createElement('p');
-            desc.textContent = interaction.message || 'Ассистент запрашивает разрешение на выполнение команды или чтение файла.';
+            desc.textContent = interaction.message || 'The assistant requests permission to execute a command or read a file.';
 
             const actions = document.createElement('div');
             actions.className = 'interaction-actions';
 
             const approveBtn = document.createElement('button');
             approveBtn.className = 'btn-action approve';
-            approveBtn.textContent = 'Разрешить';
+            approveBtn.textContent = 'Approve';
             approveBtn.onclick = () => respondInteraction(interaction, true);
 
             const rejectBtn = document.createElement('button');
             rejectBtn.className = 'btn-action reject';
-            rejectBtn.textContent = 'Отклонить';
+            rejectBtn.textContent = 'Reject';
             rejectBtn.onclick = () => respondInteraction(interaction, false);
 
             actions.appendChild(approveBtn);
@@ -1306,7 +1306,7 @@ export function getChatHtml(pairingToken: string): string {
             chatInput.value = '';
             chatInput.style.height = '24px';
 
-            appendMessage('user', text, 'Вы');
+            appendMessage('user', text, 'You');
 
             ws.send(JSON.stringify({
                 type: 'SEND_INPUT',

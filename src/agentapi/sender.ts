@@ -149,6 +149,23 @@ async function sendViaAgentAPI(conversationId: string, content: string, model?: 
                     const newConvId = result.response?.newConversation?.conversationId;
                     if (newConvId) {
                         console.log(`[Sender] new-conversation created: ${newConvId} — agent started!`);
+                        
+                        // Migrate uploaded images from safeConvFolder to newConvId folder
+                        try {
+                            const safeConvFolder = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
+                            const oldDir = path.join(BRAIN_DIR, safeConvFolder);
+                            const newDir = path.join(BRAIN_DIR, newConvId);
+                            if (fs.existsSync(oldDir)) {
+                                if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+                                const files = fs.readdirSync(oldDir);
+                                for (const file of files) {
+                                    fs.copyFileSync(path.join(oldDir, file), path.join(newDir, file));
+                                }
+                            }
+                        } catch (e) {
+                            console.error('[Sender] Error migrating upload files:', e);
+                        }
+
                         resolve({ success: true, method: 'agentapi', newConvId });
                     } else {
                         console.error('[Sender] new-conversation: no conversationId in response', stdout);

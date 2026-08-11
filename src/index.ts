@@ -24,19 +24,66 @@ try {
 dotenv.config();
 import crypto from 'crypto';
 let SERVER_ID = process.env.SERVER_ID;
-if (!SERVER_ID) {
+let DISCOVERY_SECRET = process.env.DISCOVERY_SECRET;
+if (!SERVER_ID || !DISCOVERY_SECRET) {
     const idFile = path.join(__dirname, '../../.server_id');
+    const secretFile = path.join(__dirname, '../../.discovery_secret');
     try {
-        if (fs.existsSync(idFile)) {
+        if (fs.existsSync(idFile) && fs.existsSync(secretFile)) {
             SERVER_ID = fs.readFileSync(idFile, 'utf8').trim();
+            DISCOVERY_SECRET = fs.readFileSync(secretFile, 'utf8').trim();
         } else {
-            SERVER_ID = crypto.randomUUID();
+            SERVER_ID = SERVER_ID || crypto.randomUUID();
+            DISCOVERY_SECRET = DISCOVERY_SECRET || crypto.randomBytes(32).toString('hex');
             fs.writeFileSync(idFile, SERVER_ID, 'utf8');
+            fs.writeFileSync(secretFile, DISCOVERY_SECRET, 'utf8');
         }
     } catch (e) {
-        SERVER_ID = crypto.randomUUID();
+        SERVER_ID = SERVER_ID || crypto.randomUUID();
+        DISCOVERY_SECRET = DISCOVERY_SECRET || crypto.randomBytes(32).toString('hex');
     }
 }
+process.env.SERVER_ID = SERVER_ID;
+process.env.DISCOVERY_SECRET = DISCOVERY_SECRET;
+const FIREBASE_URL = process.env.FIREBASE_DB_URL || 'https://antigravity-remote-aabae-default-rtdb.europe-west1.firebasedatabase.app';
+
+function publishToFirebase(url: string) {
+    if (!SERVER_ID || !DISCOVERY_SECRET) return;
+    const payload = JSON.stringify({
+        url: url,
+        secret: DISCOVERY_SECRET,
+        updatedAt: Date.now()
+    });
+    const reqUrl = `${FIREBASE_URL}/servers/${SERVER_ID}.json`;
+    fetch(reqUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
+    }).then(res => {
+        if (!res.ok) {
+            console.error('[Firebase] Failed to publish URL:', res.statusText);
+        } else {
+            console.log('[Firebase] Successfully published Cloudflare URL to discovery server.');
+            lastPublishedUrl = url;
+        }
+    }).catch(err => {
+        console.error('[Firebase] Error publishing to Firebase:', err.message);
+    });
+}
+
+// Watch for Cloudflare URL changes
+const urlPath = path.join(process.cwd(), '.cloudflare_url');
+let lastPublishedUrl = '';
+setInterval(() => {
+    try {
+        if (fs.existsSync(urlPath)) {
+            const url = fs.readFileSync(urlPath, 'utf8').trim();
+            if (url && url !== lastPublishedUrl && url.includes('trycloudflare.com')) {
+                publishToFirebase(url);
+            }
+        }
+    } catch (e) {}
+}, 5000);
 
 initDiscovery(); // Discover Language Server at startup (sync, one-time)
 
