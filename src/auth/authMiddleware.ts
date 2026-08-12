@@ -8,7 +8,9 @@ const PUBLIC_PATHS = [
     '/api/health',
     '/download-apk',
     '/api/exchange',
-    '/api/conversations'
+    '/api/conversations',
+    '/api/invite/request',
+    '/api/invite/status'
 ];
 
 function isPublicPath(path: string): boolean {

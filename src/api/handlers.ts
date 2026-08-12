@@ -14,7 +14,7 @@ import https from 'https';
 import { fileURLToPath } from 'url';
 import { callRPC } from '../agentapi/rpc';
 import { CascadeReactiveStream } from '../agentapi/cascadeStream';
-import { listDevices, removeDevice, pairDevice, verifyToken, restrictDevice, createGuestToken } from '../auth/auth';
+import { listDevices, removeDevice, pairDevice, verifyToken, restrictDevice, createGuestToken, createInvite, requestInvite, getInviteStatus, getPendingInvites, approveInvite, rejectInvite } from '../auth/auth';
 import { generatePairingToken, getPermanentToken } from '../auth/tokens';
 import QRCode from 'qrcode';
 import { getChatHtml } from './chatHtml';
@@ -491,26 +491,31 @@ async function checkDeviceProjectAccess(msg: any, device: any): Promise<boolean>
 
     // Block interactive terminal commands entirely for restricted devices
     if (msg.type === 'KILL') return false;
-    if (msg.type === 'START_AGENT') return false;
     if (msg.type === 'SEND_INPUT' && !msg.conversationId) return false;
 
     // 1. If projectPath is specified (verify it matches allowed project)
     if (msg.projectPath) {
         try {
+            console.log(`[DEBUG] Checking projectPath: ${msg.projectPath} against allowed IDs: ${allowedProjectIds}`);
             const tree = await getCachedProjectsTree();
             const allowedProjects = tree.filter((p: any) => 
                 allowedProjectIds.includes(p.id) || 
                 allowedProjectIds.includes(p.name) ||
                 allowedProjectIds.includes(p.projectName)
             );
+            console.log(`[DEBUG] Matched allowed projects in tree: ${allowedProjects.length}`);
             if (allowedProjects.length === 0) return false;
             
             const normInput = (msg.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
-            return allowedProjects.some((project: any) => {
+            const isMatch = allowedProjects.some((project: any) => {
                 const normProject = (project.projectPath || '').replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+                console.log(`[DEBUG] Comparing normInput: ${normInput} with normProject: ${normProject}`);
                 return normProject === normInput;
             });
+            console.log(`[DEBUG] Result of projectPath check: ${isMatch}`);
+            return isMatch;
         } catch (e) {
+            console.error('[DEBUG] Error checking project access:', e);
             return false;
         }
     }
@@ -563,6 +568,135 @@ async function checkDeviceProjectAccess(msg: any, device: any): Promise<boolean>
     }
 
     return true;
+}
+
+async function getProjectsOnly() {
+    const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
+    const result: any[] = [];
+    
+    if (fs.existsSync(projectsConfigDir)) {
+        const files = fs.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
+        for (const file of files) {
+            try {
+                const stat = fs.statSync(path.join(projectsConfigDir, file));
+                const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
+                const data = JSON.parse(content);
+                if (data.id && data.name && data.projectResources?.resources?.[0]) {
+                    const res0 = data.projectResources.resources[0];
+                    const uri = res0.folderUri || res0.gitFolder?.folderUri;
+                    if (uri) {
+                        let pPath = uri.replace('file:///', '');
+                        pPath = decodeURIComponent(pPath);
+                        result.push({
+                            id: data.id,
+                            name: data.name,
+                            projectName: data.name,
+                            title: data.name,
+                            projectPath: pPath,
+                            updatedAt: data.updatedAt || stat.mtimeMs
+                        });
+                    }
+                }
+            } catch(e) {}
+        }
+    }
+    
+    result.sort((a, b) => {
+        const tA = typeof a.updatedAt === 'number' ? a.updatedAt : new Date(a.updatedAt).getTime();
+        const tB = typeof b.updatedAt === 'number' ? b.updatedAt : new Date(b.updatedAt).getTime();
+        return tB - tA;
+    });
+    return result;
+}
+
+async function getProjectChats(projectId: string) {
+    const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
+    const archivedChatsPath = path.join(conversationsDbDir, 'archived_chats.json');
+    let archivedChats: string[] = [];
+    if (fs.existsSync(archivedChatsPath)) {
+        try {
+            archivedChats = JSON.parse(fs.readFileSync(archivedChatsPath, 'utf-8'));
+        } catch(e) {}
+    }
+    
+    const summariesMap: Record<string, string> = {};
+    const summariesPbPath = path.join(GEMINI_DIR, 'antigravity', 'agyhub_summaries_proto.pb');
+    if (fs.existsSync(summariesPbPath)) {
+        try {
+            const buf = fs.readFileSync(summariesPbPath);
+            let idx = 0;
+            while (idx < buf.length) {
+                if (buf[idx] === 0x0a && buf[idx+1] === 0x24) { // \n$
+                    const uuid = buf.toString('ascii', idx+2, idx+38);
+                    if (/^[a-f0-9\-]{36}$/.test(uuid)) {
+                        let tIdx = idx + 38;
+                        if (buf[tIdx] === 0x12) {
+                            tIdx++;
+                            while(buf[tIdx] >= 128) tIdx++;
+                            tIdx++;
+                            if (buf[tIdx] === 0x0a) {
+                                tIdx++;
+                                let titleLen = buf[tIdx];
+                                if (titleLen < 128) {
+                                    tIdx++;
+                                    const title = buf.toString('utf8', tIdx, tIdx + titleLen);
+                                    if (title.trim().length > 0 && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(title)) {
+                                        summariesMap[uuid] = title;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                idx++;
+            }
+        } catch(e) {}
+    }
+
+    const projectChats: any[] = [];
+    if (fs.existsSync(conversationsDbDir)) {
+        const dbs = fs.readdirSync(conversationsDbDir).filter(f => f.endsWith('.db'));
+        for (const dbFile of dbs) {
+            const id = dbFile.replace('.db', '');
+            if (archivedChats.includes(id)) continue;
+            if (!summariesMap[id]) continue; // Skip zombie/deleted DBs
+            
+            const dbPath = path.join(conversationsDbDir, dbFile);
+            try {
+                const db = new Database(dbPath, { readonly: true });
+                const row = db.prepare('SELECT data FROM trajectory_metadata_blob LIMIT 1').get() as any;
+                if (row && row.data) {
+                    const str = row.data.toString('utf-8');
+                    
+                    let tempStr = str;
+                    const parentMatch = str.match(/\*\$([a-f0-9\-]{36})/);
+                    if (parentMatch) tempStr = tempStr.replace(parentMatch[0], '');
+                    
+                    const matches = [...tempStr.matchAll(/\$([a-f0-9\-]{36})/g)];
+                    let dbProjectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
+                    
+                    if (dbProjectId === projectId) {
+                        const dirPath = path.join(BRAIN_DIR, id);
+                        const title = summariesMap[id] || extractTitle(dirPath, id);
+                        const subtitle = extractSubtitle(dirPath);
+                        const updatedAt = fs.statSync(dbPath).mtime.getTime();
+                        
+                        projectChats.push({
+                            id,
+                            projectId,
+                            title,
+                            subtitle,
+                            updatedAt,
+                        });
+                    }
+                }
+                db.close();
+            } catch(e) {}
+        }
+    }
+    
+    projectChats.sort((a, b) => b.updatedAt - a.updatedAt);
+    return projectChats;
 }
 
 export function setupRoutes(app: Express, wss: WebSocketServer) {
@@ -666,14 +800,15 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
                         .qr-container img {
                             display: block;
-                            width: 250px;
-                            height: 250px;
+                            width: 160px;
+                            height: 160px;
                         }
 
                         .info-text {
                             color: #cbd5e1;
-                            font-size: 0.9rem;
-                            line-height: 1.6;
+                            font-size: 0.85rem;
+                            line-height: 1.4;
+                            margin-top: 0.5rem;
                         }
 
                         .info-text strong {
@@ -682,17 +817,25 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     </style>
                 </head>
                 <body>
-                    <div class="container">
-                        <h1>Antigravity Remote</h1>
-                        <p class="subtitle">Admin pairing console</p>
+                    <div class="container" style="padding: 1.5rem 2rem;">
+                        <h1 style="font-size: 1.6rem; margin-bottom: 0.2rem;">Antigravity Remote</h1>
+                        <p class="subtitle" style="margin-bottom: 1rem;">Admin pairing console</p>
+
+                        <div style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #334155;">
+                            <h3 style="margin-top: 0; margin-bottom: 0.3rem; color: #f8fafc; font-size: 1.1rem;">Upgrade to Pro</h3>
+                            <p style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.8rem; margin-top: 0;">Unlock unlimited servers and full management capabilities. A single License Key works for up to 3 Android devices.</p>
+                            <a href="https://antigravity-remote.lemonsqueezy.com/checkout/buy/04aec57c-1e98-4ddf-a075-1d85cb162953" target="_blank" style="display: inline-block; background: #818cf8; color: white; text-decoration: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; font-size: 0.85rem; transition: background 0.2s;">
+                                Get License Key
+                            </a>
+                        </div>
                         
-                        <div class="qr-container">
+                        <div class="qr-container" style="margin-bottom: 0.5rem;">
                             <img src="${qrDataUrl}" alt="Pairing QR Code" />
                         </div>
                         
                         <div class="info-text">
-                            <p>Open the <strong>Antigravity Remote</strong> app on your smartphone, tap <strong>Scan QR</strong>, and scan this code to connect your device as an Administrator.</p>
-                            <p style="margin-top: 1rem; font-size: 0.8rem; color: #64748b;">
+                            <p style="margin: 0.5rem 0;">Open the <strong>Antigravity Remote</strong> app on your smartphone, tap <strong>Scan QR</strong>, and scan this code to connect your device as an Administrator.</p>
+                            <p style="margin-top: 0.5rem; margin-bottom: 0; font-size: 0.75rem; color: #64748b;">
                                 All device management (guests, project access) is now handled directly inside the mobile app.
                             </p>
                         </div>
@@ -906,6 +1049,90 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             }
             const { token } = createGuestToken(name, allowedProjectIds);
             res.json({ token });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/admin/invite/create', (req: Request, res: Response) => {
+        try {
+            console.log('[DEBUG] /api/admin/invite/create called with body:', req.body);
+            const requester = (req as any).device;
+            console.log('[DEBUG] requester:', requester);
+            if (!requester || (requester.allowed_project_ids && requester.allowed_project_ids.length > 0)) {
+                console.log('[DEBUG] Forbidden! allowed_project_ids:', requester?.allowed_project_ids);
+                res.status(403).json({ error: 'Forbidden' });
+                return;
+            }
+            const { name, allowedProjectIds } = req.body;
+            const token = createInvite(name, allowedProjectIds);
+            console.log('[DEBUG] Token generated:', token);
+            res.json({ token });
+        } catch (err: any) {
+            console.error('[DEBUG] Error creating invite:', err);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/invite/request', (req: Request, res: Response) => {
+        try {
+            const { token, guestName } = req.body;
+            const success = requestInvite(token, guestName);
+            res.json({ success });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/invite/status', (req: Request, res: Response) => {
+        try {
+            const { token } = req.query;
+            const status = getInviteStatus(token as string);
+            res.json(status || { status: 'NOT_FOUND' });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/admin/invites/pending', (req: Request, res: Response) => {
+        try {
+            const requester = (req as any).device;
+            if (!requester || (requester.allowed_project_ids && requester.allowed_project_ids.length > 0)) {
+                res.status(403).json({ error: 'Forbidden' });
+                return;
+            }
+            const invites = getPendingInvites();
+            res.json(invites);
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/admin/invite/approve', (req: Request, res: Response) => {
+        try {
+            const requester = (req as any).device;
+            if (!requester || (requester.allowed_project_ids && requester.allowed_project_ids.length > 0)) {
+                res.status(403).json({ error: 'Forbidden' });
+                return;
+            }
+            const { token } = req.body;
+            const success = approveInvite(token);
+            res.json({ success });
+        } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/admin/invite/reject', (req: Request, res: Response) => {
+        try {
+            const requester = (req as any).device;
+            if (!requester || (requester.allowed_project_ids && requester.allowed_project_ids.length > 0)) {
+                res.status(403).json({ error: 'Forbidden' });
+                return;
+            }
+            const { token } = req.body;
+            const success = rejectInvite(token);
+            res.json({ success });
         } catch (err: any) {
             res.status(500).json({ error: err.message });
         }
@@ -1506,7 +1733,22 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                     getOrCreateAgentStateStream(msg.id, wss);
                 }
 
-                if (msg.type === 'START_AGENT') {
+                if (msg.type === 'LIST_PROJECTS') {
+                    try {
+                        let projects = await getProjectsOnly();
+                        projects = await filterProjectsTreeForDevice(projects, (ws as any).device);
+                        ws.send(JSON.stringify({ type: 'PROJECTS_LIST', data: projects }));
+                    } catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: String(err) }));
+                    }
+                } else if (msg.type === 'GET_PROJECT_CHATS') {
+                    try {
+                        let chats = await getProjectChats(msg.projectId);
+                        ws.send(JSON.stringify({ type: 'PROJECT_CHATS_LIST', projectId: msg.projectId, data: chats }));
+                    } catch (err) {
+                        ws.send(JSON.stringify({ type: 'ERROR', error: String(err) }));
+                    }
+                } else if (msg.type === 'START_AGENT') {
                     const projectPath = msg.projectPath;
                     if (currentPtyProcess) {
                         killAntigravity(currentPtyProcess);

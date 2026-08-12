@@ -20,11 +20,14 @@ function findProjectIdByPath(projectPath: string): string | null {
     for (const file of files) {
         try {
             const data = JSON.parse(fs.readFileSync(path.join(projectsDir, file), 'utf-8'));
-            if (data.id && data.projectResources?.resources?.[0]?.folderUri) {
-                const uri = data.projectResources.resources[0].folderUri;
-                const decodedPath = decodeURIComponent(uri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
-                if (decodedPath === normalizedInput) {
-                    return data.id;
+            if (data.id && data.projectResources?.resources?.[0]) {
+                const res0 = data.projectResources.resources[0];
+                const uri = res0.folderUri || res0.gitFolder?.folderUri;
+                if (uri) {
+                    const decodedPath = decodeURIComponent(uri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+                    if (decodedPath === normalizedInput) {
+                        return data.id;
+                    }
                 }
             }
         } catch (e) {}
