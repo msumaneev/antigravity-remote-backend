@@ -1,7 +1,7 @@
 {
-  "name": "backend",
-  "version": "2.7.3",
-  "description": "",
+  "name": "antigravity-remote-backend",
+  "version": "2.7.7",
+  "description": "Node.js backend for Antigravity Remote app",
   "main": "index.js",
   "scripts": {
     "test": "vitest run",

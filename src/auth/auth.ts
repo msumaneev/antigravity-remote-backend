@@ -56,6 +56,16 @@ function getDb(): Database.Database {
     } catch (e) {
         // Column already exists, ignore
     }
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS pending_invites (
+            token TEXT PRIMARY KEY,
+            name TEXT,
+            allowed_project_ids TEXT,
+            status TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            auth_token TEXT
+        )
+    `);
     return db;
 }
 
@@ -109,7 +119,7 @@ export interface PairedDevice {
     name: string;
     pairedAt: number;
     lastSeen: number | null;
-    allowed_project_id?: string | null;
+    allowed_project_ids?: string[] | null;
 }
 
 export function pairDevice(deviceName: string): { token: string; deviceId: string } {
@@ -129,7 +139,7 @@ export function pairDevice(deviceName: string): { token: string; deviceId: strin
     return { token, deviceId };
 }
 
-export function verifyToken(token: string | null | undefined): { deviceId: string; deviceName: string; allowed_project_id?: string | null } | null {
+export function verifyToken(token: string | null | undefined): { deviceId: string; deviceName: string; allowed_project_ids?: string[] | null } | null {
     if (!token) return null;
 
     try {
@@ -142,10 +152,20 @@ export function verifyToken(token: string | null | undefined): { deviceId: strin
         // Update last_seen
         db.prepare('UPDATE paired_devices SET last_seen = ? WHERE id = ?').run(Date.now(), payload.deviceId);
 
+        let allowed_project_ids: string[] | null = null;
+        if (device.allowed_project_id) {
+            try {
+                allowed_project_ids = JSON.parse(device.allowed_project_id);
+            } catch (e) {
+                // fallback if it was a single string
+                allowed_project_ids = [device.allowed_project_id];
+            }
+        }
+
         return { 
             deviceId: payload.deviceId, 
             deviceName: payload.deviceName,
-            allowed_project_id: device.allowed_project_id || null
+            allowed_project_ids
         };
     } catch {
         return null;
@@ -157,13 +177,23 @@ export function listDevices(): PairedDevice[] {
         'SELECT id, name, paired_at, last_seen, allowed_project_id FROM paired_devices ORDER BY paired_at DESC'
     ).all() as any[];
 
-    return rows.map(row => ({
-        id: row.id,
-        name: row.name,
-        pairedAt: row.paired_at,
-        lastSeen: row.last_seen,
-        allowed_project_id: row.allowed_project_id || null
-    }));
+    return rows.map(row => {
+        let allowed_project_ids: string[] | null = null;
+        if (row.allowed_project_id) {
+            try {
+                allowed_project_ids = JSON.parse(row.allowed_project_id);
+            } catch (e) {
+                allowed_project_ids = [row.allowed_project_id];
+            }
+        }
+        return {
+            id: row.id,
+            name: row.name,
+            pairedAt: row.paired_at,
+            lastSeen: row.last_seen,
+            allowed_project_ids
+        };
+    });
 }
 
 export function removeDevice(deviceId: string): boolean {
@@ -171,12 +201,81 @@ export function removeDevice(deviceId: string): boolean {
     return result.changes > 0;
 }
 
-export function restrictDevice(deviceId: string, projectId: string | null): boolean {
-    const result = db.prepare('UPDATE paired_devices SET allowed_project_id = ? WHERE id = ?').run(projectId, deviceId);
+export function restrictDevice(deviceId: string, projectIds: string[] | null): boolean {
+    const serialized = projectIds ? JSON.stringify(projectIds) : null;
+    const result = db.prepare('UPDATE paired_devices SET allowed_project_id = ? WHERE id = ?').run(serialized, deviceId);
     return result.changes > 0;
+}
+
+export function createGuestToken(name: string, allowedProjectIds: string[]): { token: string; deviceId: string } {
+    const deviceId = crypto.randomUUID();
+    const now = Date.now();
+    const serialized = JSON.stringify(allowedProjectIds);
+
+    db.prepare(
+        'INSERT INTO paired_devices (id, name, paired_at, last_seen, allowed_project_id) VALUES (?, ?, ?, ?, ?)'
+    ).run(deviceId, name, now, now, serialized);
+
+    const token = jwt.sign(
+        { deviceId, deviceName: name },
+        JWT_SECRET
+    );
+
+    return { token, deviceId };
 }
 
 export function hasAnyPairedDevices(): boolean {
     const row = db.prepare('SELECT COUNT(*) as count FROM paired_devices').get() as any;
     return row.count > 0;
+}
+
+// ─── Invites ───────────────────────────────────────────────────────
+
+export function createInvite(name: string | null, allowedProjectIds: string[] | null): string {
+    const token = crypto.randomBytes(16).toString('hex');
+    const now = Date.now();
+    const serialized = allowedProjectIds ? JSON.stringify(allowedProjectIds) : '["*"]';
+    
+    db.prepare(
+        'INSERT INTO pending_invites (token, name, allowed_project_ids, status, created_at, auth_token) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(token, name || 'Guest', serialized, 'CREATED', now, null);
+    
+    return token;
+}
+
+export function requestInvite(token: string, guestName: string): boolean {
+    const invite = db.prepare('SELECT status FROM pending_invites WHERE token = ?').get(token) as any;
+    if (!invite) return false;
+    if (invite.status === 'APPROVED' || invite.status === 'REJECTED') return false;
+    
+    db.prepare('UPDATE pending_invites SET name = ?, status = ? WHERE token = ?').run(guestName, 'PENDING', token);
+    return true;
+}
+
+export function getInviteStatus(token: string): any {
+    const invite = db.prepare('SELECT status, auth_token FROM pending_invites WHERE token = ?').get(token) as any;
+    if (!invite) return null;
+    return invite;
+}
+
+export function getPendingInvites(): any[] {
+    return db.prepare('SELECT token, name, allowed_project_ids, created_at FROM pending_invites WHERE status = ? ORDER BY created_at ASC').all('PENDING') as any[];
+}
+
+export function approveInvite(token: string): boolean {
+    const invite = db.prepare('SELECT name, allowed_project_ids FROM pending_invites WHERE token = ?').get(token) as any;
+    if (!invite) return false;
+    
+    let allowed = ['*'];
+    try { allowed = JSON.parse(invite.allowed_project_ids); } catch(e) {}
+    
+    const { token: jwtToken } = createGuestToken(invite.name, allowed);
+    
+    db.prepare('UPDATE pending_invites SET status = ?, auth_token = ? WHERE token = ?').run('APPROVED', jwtToken, token);
+    return true;
+}
+
+export function rejectInvite(token: string): boolean {
+    const result = db.prepare('UPDATE pending_invites SET status = ? WHERE token = ?').run('REJECTED', token);
+    return result.changes > 0;
 }

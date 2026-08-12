@@ -16,7 +16,7 @@ export class CascadeReactiveStream extends EventEmitter {
     const ls = discoverLanguageServer();
     if (!ls) return;
     
-    // HTTPS POST с Envelope-ответом
+    // HTTPS POST with Envelope response
     const postData = JSON.stringify({ cascadeId: this.cascadeId });
     this.req = https.request({
       hostname: '127.0.0.1',

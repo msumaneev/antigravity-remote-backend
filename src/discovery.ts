@@ -34,12 +34,17 @@ export function startDiscovery(port: number, serverId: string, version: string) 
         });
     }
 
+    const uniqueSuffix = Math.random().toString(36).substring(2, 6);
     currentService = bonjourInstance.publish({
-        name: `Antigravity (${require('os').hostname()})`,
+        name: `Antigravity (${require('os').hostname()}-${uniqueSuffix})`,
         type: 'http',
         protocol: 'tcp',
         port: port,
         txt: { version: version, server_id: serverId }
+    });
+    
+    currentService.on('error', (err: any) => {
+        console.error('[mDNS] Publish error:', err.message);
     });
     
     console.log(`[mDNS] Published _http._tcp.local on port ${port}`);

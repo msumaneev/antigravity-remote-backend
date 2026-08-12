@@ -20,11 +20,14 @@ function findProjectIdByPath(projectPath: string): string | null {
     for (const file of files) {
         try {
             const data = JSON.parse(fs.readFileSync(path.join(projectsDir, file), 'utf-8'));
-            if (data.id && data.projectResources?.resources?.[0]?.folderUri) {
-                const uri = data.projectResources.resources[0].folderUri;
-                const decodedPath = decodeURIComponent(uri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
-                if (decodedPath === normalizedInput) {
-                    return data.id;
+            if (data.id && data.projectResources?.resources?.[0]) {
+                const res0 = data.projectResources.resources[0];
+                const uri = res0.folderUri || res0.gitFolder?.folderUri;
+                if (uri) {
+                    const decodedPath = decodeURIComponent(uri.replace('file:///', '')).replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+                    if (decodedPath === normalizedInput) {
+                        return data.id;
+                    }
                 }
             }
         } catch (e) {}
@@ -56,10 +59,10 @@ export async function sendMessage(
     }
 
     // Wrap in USER_REQUEST tags so the agent sees it as a user message
-    const content = `${settingsInjection}<USER_REQUEST>\n[Отправлено с телефона]: ${rawContent.trim()}\n</USER_REQUEST>`;
+    const content = `${settingsInjection}<USER_REQUEST>\n[Sent from phone]: ${rawContent.trim()}\n</USER_REQUEST>`;
 
     // Try AgentAPI first
-    const result = await sendViaAgentAPI(conversationId, content);
+    const result = await sendViaAgentAPI(conversationId, content, model);
     if (result.success) {
         return result;
     }
@@ -67,13 +70,17 @@ export async function sendMessage(
     console.log(`[Sender] AgentAPI failed (${result.error}), falling back to file-based approach`);
 
     // Fallback: write message file
+    if (conversationId.startsWith('START_NEW_AGENT_')) {
+        return { success: false, method: 'agentapi', error: result.error || 'Language Server is not running. Cannot start a new agent via fallback file method.' };
+    }
+    
     return sendViaFile(conversationId, content);
 }
 
 /**
  * Send via native AgentAPI CLI — this wakes the agent automatically.
  */
-async function sendViaAgentAPI(conversationId: string, content: string): Promise<SendResult> {
+async function sendViaAgentAPI(conversationId: string, content: string, model?: string): Promise<SendResult> {
     const discovery = discoverLanguageServer();
     if (!discovery) {
         return { success: false, method: 'agentapi', error: 'Language Server not found' };
@@ -110,9 +117,19 @@ async function sendViaAgentAPI(conversationId: string, content: string): Promise
                 ANTIGRAVITY_PROJECT_ID: projectId,
             };
 
-            execFile(discovery.agentApiPath, [
-                'agentapi', 'new-conversation', content
-            ], {
+            const args = ['agentapi', 'new-conversation'];
+            
+            // Default to pro if no model specified, it's 'default', or it's a Pro model
+            if (!model || model === 'default' || model.toLowerCase().includes('pro')) {
+                args.push('--model=pro');
+            } else if (model.toLowerCase().includes('lite')) {
+                args.push('--model=flash_lite');
+            } else {
+                args.push('--model=flash');
+            }
+            args.push(content);
+
+            execFile(discovery.agentApiPath, args, {
                 timeout: 30000,
                 encoding: 'utf8',
                 env,
@@ -135,6 +152,23 @@ async function sendViaAgentAPI(conversationId: string, content: string): Promise
                     const newConvId = result.response?.newConversation?.conversationId;
                     if (newConvId) {
                         console.log(`[Sender] new-conversation created: ${newConvId} — agent started!`);
+                        
+                        // Migrate uploaded images from safeConvFolder to newConvId folder
+                        try {
+                            const safeConvFolder = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_');
+                            const oldDir = path.join(BRAIN_DIR, safeConvFolder);
+                            const newDir = path.join(BRAIN_DIR, newConvId);
+                            if (fs.existsSync(oldDir)) {
+                                if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+                                const files = fs.readdirSync(oldDir);
+                                for (const file of files) {
+                                    fs.copyFileSync(path.join(oldDir, file), path.join(newDir, file));
+                                }
+                            }
+                        } catch (e) {
+                            console.error('[Sender] Error migrating upload files:', e);
+                        }
+
                         resolve({ success: true, method: 'agentapi', newConvId });
                     } else {
                         console.error('[Sender] new-conversation: no conversationId in response', stdout);
