@@ -140,6 +140,66 @@ export function getChatHtml(pairingToken: string): string {
             display: none;
         }
 
+        /* --- INVITE SCREEN --- */
+        #invite-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle at 50% 50%, #1e1b4b 0%, #0f172a 50%, #020617 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: opacity 0.5s ease;
+            display: none; /* hidden by default */
+        }
+
+        .invite-input {
+            width: 100%;
+            padding: 1rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 1rem;
+            color: white;
+            font-family: 'Outfit', sans-serif;
+            outline: none;
+            transition: all 0.2s;
+            box-sizing: border-box;
+            margin-bottom: 1.5rem;
+        }
+
+        .invite-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+        }
+
+        #invite-status {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-top: 1.5rem;
+            line-height: 1.5;
+            display: none;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         /* --- MAIN LAYOUT --- */
         #app-layout {
             display: none;
@@ -769,6 +829,26 @@ export function getChatHtml(pairingToken: string): string {
         </div>
     </div>
 
+    <!-- Invite Screen -->
+    <div id="invite-screen">
+        <div class="pairing-card">
+            <h2>You're Invited</h2>
+            <p id="invite-message">Please enter your name to request access to this chat session.</p>
+            
+            <div id="invite-form">
+                <input type="text" id="invite-name" class="invite-input" placeholder="Your name (e.g. Alex)" autocomplete="off">
+                <button class="btn-pair" id="btn-submit-invite">Request Access</button>
+            </div>
+            
+            <div id="invite-status">
+                <div class="spinner"></div>
+                <span id="invite-status-text">Waiting for the owner to approve your request...</span>
+            </div>
+            
+            <div class="pairing-error" id="invite-error">Invalid invite code.</div>
+        </div>
+    </div>
+
     <!-- Main Layout -->
     <div id="app-layout">
         <!-- Sidebar -->
@@ -872,12 +952,100 @@ export function getChatHtml(pairingToken: string): string {
         });
 
         // Initialize view
-        if (jwtToken) {
+        const path = window.location.pathname;
+        let inviteCode = null;
+        
+        if (path.startsWith('/invite/')) {
+            inviteCode = path.split('/invite/')[1]?.split('?')[0];
+        }
+
+        if (inviteCode) {
+            document.getElementById('pairing-screen').style.display = 'none';
+            document.getElementById('app-layout').style.display = 'none';
+            document.getElementById('invite-screen').style.display = 'flex';
+            setupInviteFlow(inviteCode);
+        } else if (jwtToken) {
             document.getElementById('pairing-screen').style.display = 'none';
             document.getElementById('app-layout').style.display = 'flex';
             connectWebSocket();
         } else {
-            document.getElementById('pairing-screen').style.display = 'flex';
+            if (path.startsWith('/chat') || path.startsWith('/c/')) {
+                // Not authenticated but tried to access chat -> redirect to home
+                window.location.href = '/';
+            } else {
+                document.getElementById('pairing-screen').style.display = 'flex';
+            }
+        }
+
+        // --- INVITE FLOW LOGIC ---
+        function setupInviteFlow(code) {
+            const btnSubmit = document.getElementById('btn-submit-invite');
+            const nameInput = document.getElementById('invite-name');
+            const inviteForm = document.getElementById('invite-form');
+            const inviteStatus = document.getElementById('invite-status');
+            const errorText = document.getElementById('invite-error');
+
+            btnSubmit.addEventListener('click', async () => {
+                const name = nameInput.value.trim();
+                if (!name) return;
+                
+                errorText.style.display = 'none';
+                
+                try {
+                    const res = await fetch('/api/invite/request', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: code, guestName: name })
+                    });
+                    
+                    if (res.ok) {
+                        inviteForm.style.display = 'none';
+                        inviteStatus.style.display = 'block';
+                        startInvitePolling(code);
+                    } else {
+                        const data = await res.json().catch(()=>({}));
+                        errorText.textContent = data.error || 'Failed to request invite.';
+                        errorText.style.display = 'block';
+                    }
+                } catch(e) {
+                    errorText.textContent = 'Network error.';
+                    errorText.style.display = 'block';
+                }
+            });
+            
+            nameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') btnSubmit.click();
+            });
+        }
+        
+        function startInvitePolling(code) {
+            const statusText = document.getElementById('invite-status-text');
+            const errorText = document.getElementById('invite-error');
+            
+            const pollInterval = setInterval(async () => {
+                try {
+                    const res = await fetch(\`/api/invite/status?token=\${code}\`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.status === 'APPROVED' && data.auth_token) {
+                            clearInterval(pollInterval);
+                            localStorage.setItem('antigravity_token', data.auth_token);
+                            statusText.textContent = 'Approved! Redirecting...';
+                            statusText.style.color = 'var(--success-color)';
+                            document.querySelector('.spinner').style.display = 'none';
+                            
+                            setTimeout(() => {
+                                window.location.href = '/chat';
+                            }, 1000);
+                        } else if (data.status === 'REJECTED') {
+                            clearInterval(pollInterval);
+                            document.getElementById('invite-status').style.display = 'none';
+                            errorText.textContent = 'Your request was declined.';
+                            errorText.style.display = 'block';
+                        }
+                    }
+                } catch(e) {}
+            }, 3000);
         }
 
         // Pair button handler
