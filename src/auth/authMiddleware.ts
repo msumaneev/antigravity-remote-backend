@@ -4,6 +4,9 @@ import { verifyToken } from './auth';
 // Routes that don't require authentication
 const PUBLIC_PATHS = [
     '/',
+    '/chat',
+    '/c',
+    '/invite',
     '/admin',
     '/api/health',
     '/download-apk',

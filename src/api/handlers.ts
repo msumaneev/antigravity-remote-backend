@@ -191,12 +191,14 @@ async function getProjectsTree() {
     const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
     const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
     
-    const projectMap: Record<string, { name: string, path: string }> = {};
+    const projectMap: Record<string, { name: string, path: string, updatedAt: number }> = {};
     if (fs.existsSync(projectsConfigDir)) {
         const files = fs.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
         for (const file of files) {
             try {
-                const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
+                const filePath = path.join(projectsConfigDir, file);
+                const stat = fs.statSync(filePath);
+                const content = fs.readFileSync(filePath, 'utf-8');
                 const data = JSON.parse(content);
                 if (data.id && data.name && data.projectResources?.resources?.[0]) {
                     const res0 = data.projectResources.resources[0];
@@ -204,7 +206,11 @@ async function getProjectsTree() {
                     if (uri) {
                         let pPath = uri.replace('file:///', '');
                         pPath = decodeURIComponent(pPath);
-                        projectMap[data.id] = { name: data.name, path: pPath };
+                        projectMap[data.id] = {
+                            name: data.name,
+                            path: pPath,
+                            updatedAt: data.updatedAt || stat.mtimeMs
+                        };
                     }
                 }
             } catch(e) {}
@@ -317,7 +323,8 @@ async function getProjectsTree() {
             title: projectMap[pId].name,
             projectName: projectMap[pId].name,
             projectPath: projectMap[pId].path,
-            conversations: []
+            conversations: [],
+            updatedAt: projectMap[pId].updatedAt || 0
         };
     }
     
@@ -364,12 +371,11 @@ async function getProjectsTree() {
     const result = Object.values(projectsDict);
     result.forEach((p: any) => {
         p.conversations.sort((a: any, b: any) => b.updatedAt - a.updatedAt);
+        if (p.conversations.length > 0) {
+            p.updatedAt = p.conversations[0].updatedAt;
+        }
     });
-    result.sort((a: any, b: any) => {
-        const aMax = a.conversations.length > 0 ? a.conversations[0].updatedAt : 0;
-        const bMax = b.conversations.length > 0 ? b.conversations[0].updatedAt : 0;
-        return bMax - aMax;
-    });
+    result.sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
     
     return result;
 }
@@ -571,132 +577,35 @@ async function checkDeviceProjectAccess(msg: any, device: any): Promise<boolean>
 }
 
 async function getProjectsOnly() {
-    const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
-    const result: any[] = [];
-    
-    if (fs.existsSync(projectsConfigDir)) {
-        const files = fs.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
-        for (const file of files) {
-            try {
-                const stat = fs.statSync(path.join(projectsConfigDir, file));
-                const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
-                const data = JSON.parse(content);
-                if (data.id && data.name && data.projectResources?.resources?.[0]) {
-                    const res0 = data.projectResources.resources[0];
-                    const uri = res0.folderUri || res0.gitFolder?.folderUri;
-                    if (uri) {
-                        let pPath = uri.replace('file:///', '');
-                        pPath = decodeURIComponent(pPath);
-                        result.push({
-                            id: data.id,
-                            name: data.name,
-                            projectName: data.name,
-                            title: data.name,
-                            projectPath: pPath,
-                            updatedAt: data.updatedAt || stat.mtimeMs
-                        });
-                    }
-                }
-            } catch(e) {}
-        }
-    }
-    
-    result.sort((a, b) => {
-        const tA = typeof a.updatedAt === 'number' ? a.updatedAt : new Date(a.updatedAt).getTime();
-        const tB = typeof b.updatedAt === 'number' ? b.updatedAt : new Date(b.updatedAt).getTime();
-        return tB - tA;
-    });
-    return result;
+    const tree = await getCachedProjectsTree();
+    return tree.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        projectName: p.projectName,
+        title: p.title,
+        projectPath: p.projectPath,
+        updatedAt: p.updatedAt || 0
+    })).sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 async function getProjectChats(projectId: string) {
-    const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
-    const archivedChatsPath = path.join(conversationsDbDir, 'archived_chats.json');
-    let archivedChats: string[] = [];
-    if (fs.existsSync(archivedChatsPath)) {
-        try {
-            archivedChats = JSON.parse(fs.readFileSync(archivedChatsPath, 'utf-8'));
-        } catch(e) {}
-    }
-    
-    const summariesMap: Record<string, string> = {};
-    const summariesPbPath = path.join(GEMINI_DIR, 'antigravity', 'agyhub_summaries_proto.pb');
-    if (fs.existsSync(summariesPbPath)) {
-        try {
-            const buf = fs.readFileSync(summariesPbPath);
-            let idx = 0;
-            while (idx < buf.length) {
-                if (buf[idx] === 0x0a && buf[idx+1] === 0x24) { // \n$
-                    const uuid = buf.toString('ascii', idx+2, idx+38);
-                    if (/^[a-f0-9\-]{36}$/.test(uuid)) {
-                        let tIdx = idx + 38;
-                        if (buf[tIdx] === 0x12) {
-                            tIdx++;
-                            while(buf[tIdx] >= 128) tIdx++;
-                            tIdx++;
-                            if (buf[tIdx] === 0x0a) {
-                                tIdx++;
-                                let titleLen = buf[tIdx];
-                                if (titleLen < 128) {
-                                    tIdx++;
-                                    const title = buf.toString('utf8', tIdx, tIdx + titleLen);
-                                    if (title.trim().length > 0 && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(title)) {
-                                        summariesMap[uuid] = title;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                idx++;
-            }
-        } catch(e) {}
-    }
-
-    const projectChats: any[] = [];
-    if (fs.existsSync(conversationsDbDir)) {
-        const dbs = fs.readdirSync(conversationsDbDir).filter(f => f.endsWith('.db'));
-        for (const dbFile of dbs) {
-            const id = dbFile.replace('.db', '');
-            if (archivedChats.includes(id)) continue;
-            if (!summariesMap[id]) continue; // Skip zombie/deleted DBs
-            
-            const dbPath = path.join(conversationsDbDir, dbFile);
-            try {
-                const db = new Database(dbPath, { readonly: true });
-                const row = db.prepare('SELECT data FROM trajectory_metadata_blob LIMIT 1').get() as any;
-                if (row && row.data) {
-                    const str = row.data.toString('utf-8');
-                    
-                    let tempStr = str;
-                    const parentMatch = str.match(/\*\$([a-f0-9\-]{36})/);
-                    if (parentMatch) tempStr = tempStr.replace(parentMatch[0], '');
-                    
-                    const matches = [...tempStr.matchAll(/\$([a-f0-9\-]{36})/g)];
-                    let dbProjectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
-                    
-                    if (dbProjectId === projectId) {
-                        const dirPath = path.join(BRAIN_DIR, id);
-                        const title = summariesMap[id] || extractTitle(dirPath, id);
-                        const subtitle = extractSubtitle(dirPath);
-                        const updatedAt = fs.statSync(dbPath).mtime.getTime();
-                        
-                        projectChats.push({
-                            id,
-                            projectId,
-                            title,
-                            subtitle,
-                            updatedAt,
-                        });
-                    }
-                }
-                db.close();
-            } catch(e) {}
+    const tree = await getCachedProjectsTree();
+    const normInput = projectId ? projectId.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '') : '';
+    const project = tree.find((p: any) => {
+        if (p.id === projectId) return true;
+        if (p.projectPath === projectId) return true;
+        if (p.projectPath) {
+            const normProjPath = p.projectPath.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+            if (normProjPath === normInput) return true;
         }
-    }
-    
-    projectChats.sort((a, b) => b.updatedAt - a.updatedAt);
-    return projectChats;
+        return false;
+    });
+
+    if (!project) return [];
+
+    const conversations = [...(project.conversations || [])];
+    conversations.sort((a: any, b: any) => b.updatedAt - a.updatedAt);
+    return conversations;
 }
 
 export function setupRoutes(app: Express, wss: WebSocketServer) {
@@ -706,6 +615,19 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
     app.get('/', async (req: Request, res: Response) => {
         try {
             const token = generatePairingToken();
+            const html = getChatHtml(token);
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        } catch (err: any) {
+            res.status(500).send('Error rendering Web Chat');
+        }
+    });
+
+    app.get(['/chat', '/c/:id', '/invite/:code'], async (req: Request, res: Response) => {
+        try {
+            // These routes are handled by the client-side SPA logic in chatHtml.ts
+            // We just need to serve the HTML payload
+            const token = generatePairingToken(); // Still generate it in case they navigate back to pairing
             const html = getChatHtml(token);
             res.setHeader('Content-Type', 'text/html');
             res.send(html);
