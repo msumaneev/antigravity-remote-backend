@@ -15,7 +15,7 @@ $logPath = "$scriptDir\..\.cloudflare_log.txt"
 if (Test-Path $logPath) {
     Remove-Item $logPath -Force
 }
-$process = Start-Process -FilePath $cloudflaredPath -ArgumentList "tunnel --url http://localhost:8080" -NoNewWindow -PassThru -RedirectStandardError $logPath
+$process = Start-Process -FilePath $cloudflaredPath -ArgumentList "tunnel --protocol http2 --url http://localhost:8080" -NoNewWindow -PassThru -RedirectStandardError $logPath
 
 $maxRetries = 20
 $retryCount = 0

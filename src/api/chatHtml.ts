@@ -47,11 +47,38 @@ export function getChatHtml(pairingToken: string): string {
             width: 100vw;
             height: 100vh;
             background: radial-gradient(circle at 50% 50%, #1e1b4b 0%, #0f172a 50%, #020617 100%);
-            display: flex;
+            display: none; /* controlled by JS routing */
             align-items: center;
             justify-content: center;
             z-index: 1000;
             transition: opacity 0.5s ease;
+        }
+
+        .code-input-container {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .code-char {
+            width: 44px;
+            height: 54px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+            text-align: center;
+            outline: none;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+
+        .code-char:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
         }
 
         .pairing-card {
@@ -1331,9 +1358,10 @@ export function getChatHtml(pairingToken: string): string {
 
         // Helper to strip metadata/tags from user messages (like [Sent from phone])
         function cleanUserMessage(text) {
+            if (!text) return '';
             let cleaned = text.replace(/<USER_SETTINGS_CHANGE>[\\s\\S]*?<\\/USER_SETTINGS_CHANGE>/g, '');
-            cleaned = cleaned.replace(/<USER_REQUEST>/g, '').replace(/<\/USER_REQUEST>/g, '');
-            cleaned = cleaned.replace(/\\[Sent from phone\\]:/g, '');
+            cleaned = cleaned.split('<USER_REQUEST>').join('').split('</USER_REQUEST>').join('');
+            cleaned = cleaned.split('[Sent from phone]:').join('');
             return cleaned.trim();
         }
 
