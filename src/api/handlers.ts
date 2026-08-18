@@ -18,6 +18,24 @@ import { listDevices, removeDevice, pairDevice, verifyToken, restrictDevice, cre
 import { generatePairingToken, getPermanentToken } from '../auth/tokens';
 import QRCode from 'qrcode';
 import { getChatHtml } from './chatHtml';
+import { getAdminHtml } from './adminHtml';
+
+function getPublicBaseUrl(req: Request): string {
+    try {
+        const urlPath = path.join(process.cwd(), '.cloudflare_url');
+        if (fs.existsSync(urlPath)) {
+            let cfUrl = fs.readFileSync(urlPath, 'utf8').trim();
+            if (cfUrl) {
+                if (!cfUrl.startsWith('http://') && !cfUrl.startsWith('https://')) {
+                    cfUrl = `https://${cfUrl}`;
+                }
+                return cfUrl.replace(/\/$/, '');
+            }
+        }
+    } catch (e) {}
+    const host = req.headers.host || 'localhost:8080';
+    return `https://${host}`;
+}
 
 const IGNORED_INTERFACES = ['vbox', 'virtualbox', 'vmware', 'vmnet', 'vethernet', 'bluetooth', 'wsl', 'loopback'];
 
@@ -191,12 +209,14 @@ async function getProjectsTree() {
     const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
     const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
     
-    const projectMap: Record<string, { name: string, path: string }> = {};
+    const projectMap: Record<string, { name: string, path: string, updatedAt: number }> = {};
     if (fs.existsSync(projectsConfigDir)) {
         const files = fs.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
         for (const file of files) {
             try {
-                const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
+                const filePath = path.join(projectsConfigDir, file);
+                const stat = fs.statSync(filePath);
+                const content = fs.readFileSync(filePath, 'utf-8');
                 const data = JSON.parse(content);
                 if (data.id && data.name && data.projectResources?.resources?.[0]) {
                     const res0 = data.projectResources.resources[0];
@@ -204,7 +224,11 @@ async function getProjectsTree() {
                     if (uri) {
                         let pPath = uri.replace('file:///', '');
                         pPath = decodeURIComponent(pPath);
-                        projectMap[data.id] = { name: data.name, path: pPath };
+                        projectMap[data.id] = {
+                            name: data.name,
+                            path: pPath,
+                            updatedAt: data.updatedAt || stat.mtimeMs
+                        };
                     }
                 }
             } catch(e) {}
@@ -317,7 +341,8 @@ async function getProjectsTree() {
             title: projectMap[pId].name,
             projectName: projectMap[pId].name,
             projectPath: projectMap[pId].path,
-            conversations: []
+            conversations: [],
+            updatedAt: projectMap[pId].updatedAt || 0
         };
     }
     
@@ -364,12 +389,11 @@ async function getProjectsTree() {
     const result = Object.values(projectsDict);
     result.forEach((p: any) => {
         p.conversations.sort((a: any, b: any) => b.updatedAt - a.updatedAt);
+        if (p.conversations.length > 0) {
+            p.updatedAt = p.conversations[0].updatedAt;
+        }
     });
-    result.sort((a: any, b: any) => {
-        const aMax = a.conversations.length > 0 ? a.conversations[0].updatedAt : 0;
-        const bMax = b.conversations.length > 0 ? b.conversations[0].updatedAt : 0;
-        return bMax - aMax;
-    });
+    result.sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
     
     return result;
 }
@@ -438,7 +462,7 @@ import multer from 'multer';
 async function filterProjectsTreeForDevice(tree: any[], device: any): Promise<any[]> {
     if (!device) return tree;
     const allowedProjectIds = device.allowed_project_ids;
-    if (!allowedProjectIds || allowedProjectIds.length === 0) return tree;
+    if (!allowedProjectIds || allowedProjectIds.length === 0 || allowedProjectIds.includes('*')) return tree;
     
     const configTree = await getCachedProjectsTree();
     const allowedNames: string[] = [];
@@ -487,7 +511,7 @@ export function getOrCreateAgentStateStream(conversationId: string, wss: WebSock
 async function checkDeviceProjectAccess(msg: any, device: any): Promise<boolean> {
     if (!device) return true; // Before auth is fully set up, let AUTH messages pass
     const allowedProjectIds = device.allowed_project_ids;
-    if (!allowedProjectIds || allowedProjectIds.length === 0) return true; // Unrestricted admin device
+    if (!allowedProjectIds || allowedProjectIds.length === 0 || allowedProjectIds.includes('*')) return true; // Unrestricted admin device
 
     // Block interactive terminal commands entirely for restricted devices
     if (msg.type === 'KILL') return false;
@@ -571,132 +595,35 @@ async function checkDeviceProjectAccess(msg: any, device: any): Promise<boolean>
 }
 
 async function getProjectsOnly() {
-    const projectsConfigDir = path.join(GEMINI_DIR, 'config', 'projects');
-    const result: any[] = [];
-    
-    if (fs.existsSync(projectsConfigDir)) {
-        const files = fs.readdirSync(projectsConfigDir).filter(f => f.endsWith('.json'));
-        for (const file of files) {
-            try {
-                const stat = fs.statSync(path.join(projectsConfigDir, file));
-                const content = fs.readFileSync(path.join(projectsConfigDir, file), 'utf-8');
-                const data = JSON.parse(content);
-                if (data.id && data.name && data.projectResources?.resources?.[0]) {
-                    const res0 = data.projectResources.resources[0];
-                    const uri = res0.folderUri || res0.gitFolder?.folderUri;
-                    if (uri) {
-                        let pPath = uri.replace('file:///', '');
-                        pPath = decodeURIComponent(pPath);
-                        result.push({
-                            id: data.id,
-                            name: data.name,
-                            projectName: data.name,
-                            title: data.name,
-                            projectPath: pPath,
-                            updatedAt: data.updatedAt || stat.mtimeMs
-                        });
-                    }
-                }
-            } catch(e) {}
-        }
-    }
-    
-    result.sort((a, b) => {
-        const tA = typeof a.updatedAt === 'number' ? a.updatedAt : new Date(a.updatedAt).getTime();
-        const tB = typeof b.updatedAt === 'number' ? b.updatedAt : new Date(b.updatedAt).getTime();
-        return tB - tA;
-    });
-    return result;
+    const tree = await getCachedProjectsTree();
+    return tree.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        projectName: p.projectName,
+        title: p.title,
+        projectPath: p.projectPath,
+        updatedAt: p.updatedAt || 0
+    })).sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 async function getProjectChats(projectId: string) {
-    const conversationsDbDir = path.join(GEMINI_DIR, 'antigravity', 'conversations');
-    const archivedChatsPath = path.join(conversationsDbDir, 'archived_chats.json');
-    let archivedChats: string[] = [];
-    if (fs.existsSync(archivedChatsPath)) {
-        try {
-            archivedChats = JSON.parse(fs.readFileSync(archivedChatsPath, 'utf-8'));
-        } catch(e) {}
-    }
-    
-    const summariesMap: Record<string, string> = {};
-    const summariesPbPath = path.join(GEMINI_DIR, 'antigravity', 'agyhub_summaries_proto.pb');
-    if (fs.existsSync(summariesPbPath)) {
-        try {
-            const buf = fs.readFileSync(summariesPbPath);
-            let idx = 0;
-            while (idx < buf.length) {
-                if (buf[idx] === 0x0a && buf[idx+1] === 0x24) { // \n$
-                    const uuid = buf.toString('ascii', idx+2, idx+38);
-                    if (/^[a-f0-9\-]{36}$/.test(uuid)) {
-                        let tIdx = idx + 38;
-                        if (buf[tIdx] === 0x12) {
-                            tIdx++;
-                            while(buf[tIdx] >= 128) tIdx++;
-                            tIdx++;
-                            if (buf[tIdx] === 0x0a) {
-                                tIdx++;
-                                let titleLen = buf[tIdx];
-                                if (titleLen < 128) {
-                                    tIdx++;
-                                    const title = buf.toString('utf8', tIdx, tIdx + titleLen);
-                                    if (title.trim().length > 0 && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(title)) {
-                                        summariesMap[uuid] = title;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                idx++;
-            }
-        } catch(e) {}
-    }
-
-    const projectChats: any[] = [];
-    if (fs.existsSync(conversationsDbDir)) {
-        const dbs = fs.readdirSync(conversationsDbDir).filter(f => f.endsWith('.db'));
-        for (const dbFile of dbs) {
-            const id = dbFile.replace('.db', '');
-            if (archivedChats.includes(id)) continue;
-            if (!summariesMap[id]) continue; // Skip zombie/deleted DBs
-            
-            const dbPath = path.join(conversationsDbDir, dbFile);
-            try {
-                const db = new Database(dbPath, { readonly: true });
-                const row = db.prepare('SELECT data FROM trajectory_metadata_blob LIMIT 1').get() as any;
-                if (row && row.data) {
-                    const str = row.data.toString('utf-8');
-                    
-                    let tempStr = str;
-                    const parentMatch = str.match(/\*\$([a-f0-9\-]{36})/);
-                    if (parentMatch) tempStr = tempStr.replace(parentMatch[0], '');
-                    
-                    const matches = [...tempStr.matchAll(/\$([a-f0-9\-]{36})/g)];
-                    let dbProjectId = matches.length > 0 ? matches[matches.length - 1][1] : null;
-                    
-                    if (dbProjectId === projectId) {
-                        const dirPath = path.join(BRAIN_DIR, id);
-                        const title = summariesMap[id] || extractTitle(dirPath, id);
-                        const subtitle = extractSubtitle(dirPath);
-                        const updatedAt = fs.statSync(dbPath).mtime.getTime();
-                        
-                        projectChats.push({
-                            id,
-                            projectId,
-                            title,
-                            subtitle,
-                            updatedAt,
-                        });
-                    }
-                }
-                db.close();
-            } catch(e) {}
+    const tree = await getCachedProjectsTree();
+    const normInput = projectId ? projectId.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '') : '';
+    const project = tree.find((p: any) => {
+        if (p.id === projectId) return true;
+        if (p.projectPath === projectId) return true;
+        if (p.projectPath) {
+            const normProjPath = p.projectPath.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '').replace('file:///', '');
+            if (normProjPath === normInput) return true;
         }
-    }
-    
-    projectChats.sort((a, b) => b.updatedAt - a.updatedAt);
-    return projectChats;
+        return false;
+    });
+
+    if (!project) return [];
+
+    const conversations = [...(project.conversations || [])];
+    conversations.sort((a: any, b: any) => b.updatedAt - a.updatedAt);
+    return conversations;
 }
 
 export function setupRoutes(app: Express, wss: WebSocketServer) {
@@ -714,6 +641,19 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         }
     });
 
+    app.get(['/chat', '/c/:id', '/invite/:code'], async (req: Request, res: Response) => {
+        try {
+            // These routes are handled by the client-side SPA logic in chatHtml.ts
+            // We just need to serve the HTML payload
+            const token = generatePairingToken(); // Still generate it in case they navigate back to pairing
+            const html = getChatHtml(token);
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        } catch (err: any) {
+            res.status(500).send('Error rendering Web Chat');
+        }
+    });
+
     app.get('/admin', async (req: Request, res: Response) => {
         const ip = req.ip || req.socket.remoteAddress || '';
         const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.endsWith('127.0.0.1');
@@ -723,7 +663,6 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         }
         try {
             const token = generatePairingToken();
-            const port = process.env.PORT || 8080;
             let cloudflareUrl = '';
             try {
                 const fs = require('fs');
@@ -741,112 +680,11 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             });
 
             const qrDataUrl = await QRCode.toDataURL(payload);
-            
-            const html = `
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <title>Antigravity Remote Admin Console</title>
-                    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-                    <style>
-                        body {
-                            background-color: #0f172a;
-                            color: #f8fafc;
-                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                            margin: 0;
-                            padding: 0;
-                            display: flex;
-                            flex-direction: column;
-                            align-items: center;
-                            justify-content: center;
-                            min-height: 100vh;
-                        }
-                        
-                        .container {
-                            background: #1e293b;
-                            border: 1px solid #334155;
-                            border-radius: 16px;
-                            padding: 2.5rem;
-                            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
-                            text-align: center;
-                            max-width: 450px;
-                            width: 90%;
-                        }
-
-                        h1 {
-                            font-size: 1.75rem;
-                            margin: 0 0 0.5rem 0;
-                            background: linear-gradient(135deg, #818cf8 0%, #34d399 100%);
-                            -webkit-background-clip: text;
-                            -webkit-text-fill-color: transparent;
-                        }
-
-                        p.subtitle {
-                            color: #94a3b8;
-                            font-size: 0.95rem;
-                            margin: 0 0 2rem 0;
-                            line-height: 1.5;
-                        }
-
-                        .qr-container {
-                            background: white;
-                            padding: 1.25rem;
-                            border-radius: 16px;
-                            display: inline-block;
-                            margin-bottom: 1.5rem;
-                        }
-
-                        .qr-container img {
-                            display: block;
-                            width: 160px;
-                            height: 160px;
-                        }
-
-                        .info-text {
-                            color: #cbd5e1;
-                            font-size: 0.85rem;
-                            line-height: 1.4;
-                            margin-top: 0.5rem;
-                        }
-
-                        .info-text strong {
-                            color: #fff;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container" style="padding: 1.5rem 2rem;">
-                        <h1 style="font-size: 1.6rem; margin-bottom: 0.2rem;">Antigravity Remote</h1>
-                        <p class="subtitle" style="margin-bottom: 1rem;">Admin pairing console</p>
-
-                        <div style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #334155;">
-                            <h3 style="margin-top: 0; margin-bottom: 0.3rem; color: #f8fafc; font-size: 1.1rem;">Upgrade to Pro</h3>
-                            <p style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.8rem; margin-top: 0;">Unlock unlimited servers and full management capabilities. A single License Key works for up to 3 Android devices.</p>
-                            <a href="https://antigravity-remote.lemonsqueezy.com/checkout/buy/04aec57c-1e98-4ddf-a075-1d85cb162953" target="_blank" style="display: inline-block; background: #818cf8; color: white; text-decoration: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; font-size: 0.85rem; transition: background 0.2s;">
-                                Get License Key
-                            </a>
-                        </div>
-                        
-                        <div class="qr-container" style="margin-bottom: 0.5rem;">
-                            <img src="${qrDataUrl}" alt="Pairing QR Code" />
-                        </div>
-                        
-                        <div class="info-text">
-                            <p style="margin: 0.5rem 0;">Open the <strong>Antigravity Remote</strong> app on your smartphone, tap <strong>Scan QR</strong>, and scan this code to connect your device as an Administrator.</p>
-                            <p style="margin-top: 0.5rem; margin-bottom: 0; font-size: 0.75rem; color: #64748b;">
-                                All device management (guests, project access) is now handled directly inside the mobile app.
-                            </p>
-                        </div>
-                    </div>
-                </body>
-                </html>
-            `;
+            const html = getAdminHtml(qrDataUrl, token, cloudflareUrl, process.env.SERVER_ID || '');
             res.setHeader('Content-Type', 'text/html');
             res.send(html);
         } catch (err: any) {
-            res.status(500).send('Error generating QR code');
+            res.status(500).send('Error generating Admin Console');
         }
     });
 
@@ -1066,8 +904,10 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             }
             const { name, allowedProjectIds } = req.body;
             const token = createInvite(name, allowedProjectIds);
-            console.log('[DEBUG] Token generated:', token);
-            res.json({ token });
+            const baseUrl = getPublicBaseUrl(req);
+            const inviteUrl = `${baseUrl}/invite/${token}`;
+            console.log('[DEBUG] Token and inviteUrl generated:', token, inviteUrl);
+            res.json({ token, inviteUrl });
         } catch (err: any) {
             console.error('[DEBUG] Error creating invite:', err);
             res.status(500).json({ error: err.message });

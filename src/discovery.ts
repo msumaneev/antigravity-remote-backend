@@ -43,9 +43,11 @@ export function startDiscovery(port: number, serverId: string, version: string) 
         txt: { version: version, server_id: serverId }
     });
     
-    currentService.on('error', (err: any) => {
-        console.error('[mDNS] Publish error:', err.message);
-    });
+    if (currentService && typeof currentService.on === 'function') {
+        currentService.on('error', (err: any) => {
+            console.error('[mDNS] Publish error:', err.message);
+        });
+    }
     
     console.log(`[mDNS] Published _http._tcp.local on port ${port}`);
 }

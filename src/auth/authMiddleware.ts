@@ -4,6 +4,9 @@ import { verifyToken } from './auth';
 // Routes that don't require authentication
 const PUBLIC_PATHS = [
     '/',
+    '/chat',
+    '/c',
+    '/invite',
     '/admin',
     '/api/health',
     '/download-apk',
@@ -28,7 +31,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     const ip = req.ip || req.socket.remoteAddress || '';
     const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip.endsWith('127.0.0.1');
     if (isLocal) {
-        (req as any).device = { deviceId: 'local-admin', deviceName: 'Local Admin', allowed_project_id: null };
+        (req as any).device = { deviceId: 'local-admin', deviceName: 'Local Admin', allowed_project_id: null, allowed_project_ids: null };
         next();
         return;
     }
