@@ -649,7 +649,7 @@ export function getAdminHtml(qrDataUrl: string, pairingToken: string, cloudflare
                     <p style="font-size: 0.825rem; color: var(--text-secondary); line-height: 1.45;">
                         Unlock unlimited servers and full remote management. One license covers up to 3 mobile devices.
                     </p>
-                    <a href="https://antigravity-remote.lemonsqueezy.com/checkout/buy/04aec57c-1e98-4ddf-a075-1d85cb162953" target="_blank" class="btn btn-primary btn-sm" style="text-decoration: none;">
+                    <a href="https://antigravity-remote-aabae.web.app" target="_blank" class="btn btn-primary btn-sm" style="text-decoration: none;">
                         Get Pro License Key
                     </a>
                 </div>
