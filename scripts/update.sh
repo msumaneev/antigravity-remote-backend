@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "Starting backend update process..."
 sleep 3
-git pull origin master
+git pull origin master || { echo "[ERROR] git pull failed. Aborting update."; exit 1; }
 npm install
 npm run build
 echo "Restarting server..."

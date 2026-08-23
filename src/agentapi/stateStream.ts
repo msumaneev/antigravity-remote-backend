@@ -6,6 +6,11 @@ export class AgentStateStream extends EventEmitter {
     private conversationId: string;
     private req: any = null;
     private reconnectTimer: NodeJS.Timeout | null = null;
+    private currentInteraction: {
+        payload: any;
+        stepIndex: number | null;
+        trajectoryId: string | null;
+    } | null = null;
 
     constructor(conversationId: string) {
         super();
@@ -83,26 +88,66 @@ export class AgentStateStream extends EventEmitter {
                                 } else {
                                     mappedData.state = 'IDLE';
                                 }
+
+                                // Check for requestedInteraction inside steps
+                                const steps = update.mainTrajectoryUpdate?.stepsUpdate?.steps;
+                                if (Array.isArray(steps)) {
+                                    for (const step of steps) {
+                                        if (step.status === 'CORTEX_STEP_STATUS_WAITING' && step.requestedInteraction) {
+                                            const stepIndex = step.metadata?.sourceTrajectoryStepInfo?.stepIndex ?? null;
+                                            const trajectoryId = step.metadata?.sourceTrajectoryStepInfo?.trajectoryId ?? update.trajectoryId ?? null;
+                                            this.currentInteraction = {
+                                                payload: step.requestedInteraction,
+                                                stepIndex,
+                                                trajectoryId
+                                            };
+                                            console.log(`[StateStream] 🎯 Found WAITING step with requestedInteraction (stepIndex: ${stepIndex}) for ${this.conversationId}`);
+                                        } else if (step.status === 'CORTEX_STEP_STATUS_DONE' || step.completedInteractions) {
+                                            const stepIndex = step.metadata?.sourceTrajectoryStepInfo?.stepIndex;
+                                            if (this.currentInteraction && (this.currentInteraction.stepIndex === null || this.currentInteraction.stepIndex === stepIndex)) {
+                                                console.log(`[StateStream] 🧹 Interaction completed for ${this.conversationId}, clearing.`);
+                                                this.currentInteraction = null;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (update.requestedInteraction) {
+                                    this.currentInteraction = {
+                                        payload: update.requestedInteraction,
+                                        stepIndex: null,
+                                        trajectoryId: update.trajectoryId ?? null
+                                    };
+                                }
+
+                                if (status === 'CASCADE_RUN_STATUS_IDLE' && (!steps || !steps.some((s: any) => s.status === 'CORTEX_STEP_STATUS_WAITING'))) {
+                                    this.currentInteraction = null;
+                                }
+
+                                mappedData.requestedInteraction = this.currentInteraction?.payload || null;
+                                mappedData.interactionStepIndex = this.currentInteraction?.stepIndex ?? null;
+                                mappedData.interactionTrajectoryId = this.currentInteraction?.trajectoryId ?? null;
                             } else if (messageObj.error) {
                                 mappedData = {
                                     error: messageObj.error,
-                                    state: 'IDLE'
+                                    state: 'IDLE',
+                                    requestedInteraction: null
                                 };
+                                this.currentInteraction = null;
                             } else {
                                 mappedData = {
                                     ...messageObj,
-                                    state: 'IDLE'
+                                    state: 'IDLE',
+                                    requestedInteraction: null
                                 };
+                                this.currentInteraction = null;
                             }
                             
                             // Ensure conversationId is always present
                             mappedData.conversationId = this.conversationId;
 
-                            // DIAGNOSTIC: Log full requestedInteraction payload
                             if (mappedData.requestedInteraction) {
-                                console.log('[StateStream] 🔍 requestedInteraction FULL PAYLOAD:');
-                                console.log(JSON.stringify(mappedData.requestedInteraction, null, 2));
-                                console.log('[StateStream] 🔍 requestedInteraction KEYS:', Object.keys(mappedData.requestedInteraction));
+                                console.log(`[StateStream] 📡 Emitting state with requestedInteraction for ${this.conversationId}`);
                             }
                             
                             this.emit('state', mappedData);

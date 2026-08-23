@@ -2,6 +2,10 @@
 echo Starting backend update process...
 ping 127.0.0.1 -n 4 > nul
 git pull origin master
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] git pull failed or encountered conflicts. Aborting update.
+    exit /b %ERRORLEVEL%
+)
 call npm install
 call npm run build
 echo Restarting server...
