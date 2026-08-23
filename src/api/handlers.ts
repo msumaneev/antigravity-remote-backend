@@ -706,7 +706,19 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
         }
     });
 
+    let isUpdateInProgress = false;
+
     app.post('/api/update-server', (req: Request, res: Response) => {
+        if (process.env.DISABLE_AUTO_UPDATE === 'true') {
+            res.status(403).json({ success: false, error: 'Auto-update is disabled for this server instance (DISABLE_AUTO_UPDATE=true).' });
+            return;
+        }
+
+        if (isUpdateInProgress) {
+            res.status(409).json({ success: false, error: 'Server update is already in progress.' });
+            return;
+        }
+
         const isWindows = process.platform === 'win32';
         const scriptPath = path.join(__dirname, '..', '..', 'scripts', isWindows ? 'update.bat' : 'update.sh');
         
@@ -716,6 +728,8 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
             res.status(500).json({ success: false, error: 'Update script not found' });
             return;
         }
+
+        isUpdateInProgress = true;
 
         // Send success response to client first so it doesn't hang
         res.json({ success: true, message: 'Update process initiated. Server is restarting.' });
@@ -780,6 +794,7 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
 
     app.get('/api/health', async (req: Request, res: Response) => {
         const serverId = process.env.SERVER_ID || '';
+        const canAutoUpdate = process.env.DISABLE_AUTO_UPDATE !== 'true';
         try {
             const heartbeat = await callRPC('Heartbeat', {}, { timeoutMs: 2000 });
             const ls = discoverLanguageServer();
@@ -789,10 +804,11 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                 lastHeartbeat: heartbeat.lastExtensionHeartbeat,
                 pid: ls?.pid,
                 version: serverVersion,
-                serverId: serverId
+                serverId: serverId,
+                canAutoUpdate: canAutoUpdate
             });
         } catch {
-            res.json({ ok: true, lsRunning: false, version: serverVersion, serverId: serverId });
+            res.json({ ok: true, lsRunning: false, version: serverVersion, serverId: serverId, canAutoUpdate: canAutoUpdate });
         }
     });
 
@@ -1628,19 +1644,27 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             }));
                         }
                     }
-                } else if (msg.type === 'APPROVE_INTERACTION' || msg.type === 'REJECT_INTERACTION') {
-                    if (msg.conversationId && msg.interactionPayload) {
+                } else if (msg.type === 'APPROVE_INTERACTION' || msg.type === 'REJECT_INTERACTION' || msg.type === 'RESOLVE_INTERACTION') {
+                    if (msg.conversationId) {
                         const isApprove = msg.type === 'APPROVE_INTERACTION';
-                        let finalInteraction = msg.interactionPayload;
+                        let finalInteraction = msg.interaction || msg.interactionPayload || {};
                         
-                        if (!isApprove) {
+                        // If trajectoryId / stepIndex passed at top level, inject into interaction
+                        if (msg.trajectoryId && !finalInteraction.trajectoryId) {
+                            finalInteraction.trajectoryId = msg.trajectoryId;
+                        }
+                        if (typeof msg.stepIndex === 'number' && finalInteraction.stepIndex === undefined) {
+                            finalInteraction.stepIndex = msg.stepIndex;
+                        }
+
+                        if (msg.type === 'REJECT_INTERACTION') {
                             // Deny Interaction logic
-                            const COMMON = new Set(['trajectoryId', 'stepIndex', 'timedOut']);
+                            const COMMON = new Set(['trajectoryId', 'stepIndex', 'timedOut', 'remoteControlDetails']);
                             const out: any = {};
                             for (const [key, val] of Object.entries(finalInteraction)) {
                                 if (COMMON.has(key) || val === null || typeof val !== 'object') { out[key] = val; continue; }
                                 if (key === 'filePermission') {
-                                    out[key] = { absolutePathUri: (val as any).absolutePathUri };
+                                    out[key] = { absolutePathUri: (val as any).absolutePathUri, allow: false };
                                     continue;
                                 }
                                 const member = { ...(val as any) };
@@ -1658,8 +1682,11 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                             interaction: finalInteraction
                         };
 
+                        console.log(`[Interaction] Sending HandleCascadeUserInteraction for ${msg.conversationId}:`, JSON.stringify(body, null, 2));
+
                         const ls = discoverLanguageServer();
                         if (ls) {
+                            const postData = JSON.stringify(body);
                             const req = https.request({
                                 hostname: 'localhost',
                                 port: ls.httpsPort,
@@ -1668,17 +1695,30 @@ export function setupRoutes(app: Express, wss: WebSocketServer) {
                                 headers: {
                                     'Content-Type': 'application/json',
                                     'Connect-Protocol-Version': '1',
-                                    'X-Codeium-Csrf-Token': ls.csrfToken
+                                    'X-Codeium-Csrf-Token': ls.csrfToken,
+                                    'Content-Length': Buffer.byteLength(postData)
                                 },
                                 rejectUnauthorized: false
                             }, (res: any) => {
-                                console.log(`[Interaction] ${isApprove ? 'Approved' : 'Rejected'}, status=${res.statusCode}`);
+                                let resBody = '';
+                                res.on('data', (d: any) => resBody += d);
+                                res.on('end', () => {
+                                    console.log(`[Interaction] HandleCascadeUserInteraction completed with status ${res.statusCode}: ${resBody}`);
+                                    ws.send(JSON.stringify({ 
+                                        type: 'EVENT', 
+                                        data: `Interaction response sent (status ${res.statusCode})` 
+                                    }));
+                                });
                             });
-                            req.on('error', (e: any) => console.error('[Interaction] Error:', e));
-                            req.write(JSON.stringify(body));
+                            req.on('error', (e: any) => {
+                                console.error('[Interaction] Error calling HandleCascadeUserInteraction:', e);
+                                ws.send(JSON.stringify({ type: 'ERROR', error: `Failed to submit interaction: ${e.message}` }));
+                            });
+                            req.write(postData);
                             req.end();
                         } else {
                             console.error('[Interaction] No Language Server found to handle interaction');
+                            ws.send(JSON.stringify({ type: 'ERROR', error: 'Language Server not available' }));
                         }
                     }
                 } else if (msg.type === 'KILL') {
