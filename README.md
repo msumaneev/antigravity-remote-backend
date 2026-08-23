@@ -44,9 +44,11 @@ For desktop users (such as accountants or managers) who prefer working on a PC r
 - **Image Uploads** — Supports sending images from your phone's gallery directly to the Antigravity cascade.
 - **Remote Access** — Securely exposed via Cloudflare Tunnels to control your local AI from anywhere in the world without port forwarding or VPNs.
 
-### 🔄 Self-Updating Server
-- **One-Click Updates** — When the Android client connects, it compares the running backend version against the required target version. If the backend is outdated, a button with `(Update available: [new version])` is displayed in the app.
-- **Detached Execution Lifecycle** — Tapping "Update" triggers an API call that spawns a detached platform-specific update script (`update.bat` / `update.sh`), terminates the WebSocket server, pulls the latest code from GitHub, installs packages, rebuilds the server, and automatically boots the new version.
+### 🔄 Self-Updating Server & Fork Protection (v2.9.1+)
+- **One-Click Updates** — When the Android client connects, it compares the running backend version against the required target version. If the backend is outdated, an `Update` button is displayed in the mobile app.
+- **Safe Detached Execution** — Tapping "Update" triggers `/api/update-server`, spawning a detached platform-specific script (`update.bat` / `update.sh`) that verifies `git pull` status before rebuilding.
+- **Race Condition Locking** — Prevents duplicate simultaneous updates from multiple paired devices.
+- **Open-Source Fork Protection** — If you are actively developing your own custom fork or local modifications, you can disable remote auto-updates by setting `DISABLE_AUTO_UPDATE=true` in `.env`. Custom builds with `-custom`, `-dev`, `-fork` version tags are also automatically recognized by the app.
 
 ### 🔔 Push Notifications Architecture
 The application uses a **direct local connection** system for push notifications, bypassing external cloud messaging servers (like Google FCM or APNs):
@@ -68,10 +70,14 @@ npm run build
 ```
 
 ### 2. Configuration (.env)
-Create a `.env` file in the root directory to configure Firebase Discovery:
+Create a `.env` file in the root directory:
 ```env
+# Optional: Firebase Realtime Database for automatic URL discovery
 FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com
 FIREBASE_SECRET=your_firebase_secret_key
+
+# Optional: Disable mobile 1-click updates (recommended for active fork development)
+DISABLE_AUTO_UPDATE=false
 ```
 
 ### 3. Exposing to the Internet & Running (Cloudflare Tunnels)
