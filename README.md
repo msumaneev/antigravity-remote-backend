@@ -44,9 +44,11 @@ For desktop users (such as accountants or managers) who prefer working on a PC r
 - **Image Uploads** — Supports sending images from your phone's gallery directly to the Antigravity cascade.
 - **Remote Access** — Securely exposed via Cloudflare Tunnels to control your local AI from anywhere in the world without port forwarding or VPNs.
 
-### 🔄 Self-Updating Server
-- **One-Click Updates** — When the Android client connects, it compares the running backend version against the required target version. If the backend is outdated, a button with `(Update available: [new version])` is displayed in the app.
-- **Detached Execution Lifecycle** — Tapping "Update" triggers an API call that spawns a detached platform-specific update script (`update.bat` / `update.sh`), terminates the WebSocket server, pulls the latest code from GitHub, installs packages, rebuilds the server, and automatically boots the new version.
+### 🔄 Self-Updating Server & Fork Protection (v2.9.1+)
+- **One-Click Updates** — When the Android client connects, it compares the running backend version against the required target version. If the backend is outdated, an `Update` button is displayed in the mobile app.
+- **Safe Detached Execution** — Tapping "Update" triggers `/api/update-server`, spawning a detached platform-specific script (`update.bat` / `update.sh`) that verifies `git pull` status before rebuilding.
+- **Race Condition Locking** — Prevents duplicate simultaneous updates from multiple paired devices.
+- **Open-Source Fork Protection** — If you are actively developing your own custom fork or local modifications, you can disable remote auto-updates by setting `DISABLE_AUTO_UPDATE=true` in `.env`. Custom builds with `-custom`, `-dev`, `-fork` version tags are also automatically recognized by the app.
 
 ### 🔔 Push Notifications Architecture
 The application uses a **direct local connection** system for push notifications, bypassing external cloud messaging servers (like Google FCM or APNs):
@@ -68,29 +70,50 @@ npm run build
 ```
 
 ### 2. Configuration (.env)
-Create a `.env` file in the root directory to configure Firebase Discovery:
+Create a `.env` file in the root directory:
 ```env
+# Optional: Firebase Realtime Database for automatic URL discovery
 FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com
 FIREBASE_SECRET=your_firebase_secret_key
+
+# Optional: Disable mobile 1-click updates (recommended for active fork development)
+DISABLE_AUTO_UPDATE=false
 ```
 
-### 3. Exposing to the Internet & Running (Cloudflare Tunnels)
+### 3. Exposing to the Internet & Self-Healing Tunnel
 Instead of relying on local IPs or VPNs, the server uses Cloudflare Tunnels to securely expose the connection to the internet.
 
-To start the server and the tunnel simultaneously, run the included PowerShell script:
+To start the tunnel with the built-in self-healing watchdog, run:
 ```powershell
-.\start_tunnel.ps1
+.\scripts\start_tunnel.ps1
 ```
 This script will:
-1. Start the Node.js backend.
-2. Launch a Cloudflare Tunnel (cloudflared).
-3. Automatically publish the new public URL to Firebase.
-4. Your Android app will discover the new URL instantly upon launch.
+1. Launch `cloudflared` Quick Tunnel for `http://localhost:8080`.
+2. Extract the public tunnel URL and publish it to Firebase.
+3. Continuously monitor tunnel health via periodic `/api/health` pings every 30 seconds.
+4. If Cloudflare connection drops or the temporary URL expires, automatically restart `cloudflared`, obtain a fresh URL, and update Firebase.
 
-**Autostart (Recommended)**
-You can configure Windows Task Scheduler or use PM2 to run `start_tunnel.ps1` automatically on boot to keep your backend permanently available.
+### 4. 24/7 Autostart on Windows Reboot (Recommended)
+To ensure the server and tunnel start automatically on Windows boot:
+
+**Option A: Windows Startup Folder (Easiest)**
+1. Press `Win + R`, type `shell:startup`, and press Enter.
+2. Create a file named `AntigravityRemote.vbs` inside the folder with the following content:
+```vbs
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File ""C:\path\to\backend\scripts\autostart.ps1""", 0, false
+```
+*(Replace `C:\path\to\backend` with your actual backend directory path).*
+
+**Option B: PM2 Process Manager**
+```bash
+npm install -g pm2
+npm run start
+pm2 save
+```
 
 ---
 
 ## 📄 License
 MIT License
+
