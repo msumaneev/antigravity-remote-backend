@@ -80,23 +80,40 @@ FIREBASE_SECRET=your_firebase_secret_key
 DISABLE_AUTO_UPDATE=false
 ```
 
-### 3. Exposing to the Internet & Running (Cloudflare Tunnels)
+### 3. Exposing to the Internet & Self-Healing Tunnel
 Instead of relying on local IPs or VPNs, the server uses Cloudflare Tunnels to securely expose the connection to the internet.
 
-To start the server and the tunnel simultaneously, run the included PowerShell script:
+To start the tunnel with the built-in self-healing watchdog, run:
 ```powershell
-.\start_tunnel.ps1
+.\scripts\start_tunnel.ps1
 ```
 This script will:
-1. Start the Node.js backend.
-2. Launch a Cloudflare Tunnel (cloudflared).
-3. Automatically publish the new public URL to Firebase.
-4. Your Android app will discover the new URL instantly upon launch.
+1. Launch `cloudflared` Quick Tunnel for `http://localhost:8080`.
+2. Extract the public tunnel URL and publish it to Firebase.
+3. Continuously monitor tunnel health via periodic `/api/health` pings every 30 seconds.
+4. If Cloudflare connection drops or the temporary URL expires, automatically restart `cloudflared`, obtain a fresh URL, and update Firebase.
 
-**Autostart (Recommended)**
-You can configure Windows Task Scheduler or use PM2 to run `start_tunnel.ps1` automatically on boot to keep your backend permanently available.
+### 4. 24/7 Autostart on Windows Reboot (Recommended)
+To ensure the server and tunnel start automatically on Windows boot:
+
+**Option A: Windows Startup Folder (Easiest)**
+1. Press `Win + R`, type `shell:startup`, and press Enter.
+2. Create a file named `AntigravityRemote.vbs` inside the folder with the following content:
+```vbs
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File ""C:\path\to\backend\scripts\autostart.ps1""", 0, false
+```
+*(Replace `C:\path\to\backend` with your actual backend directory path).*
+
+**Option B: PM2 Process Manager**
+```bash
+npm install -g pm2
+npm run start
+pm2 save
+```
 
 ---
 
 ## 📄 License
 MIT License
+
